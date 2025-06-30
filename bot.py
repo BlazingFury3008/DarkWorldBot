@@ -3,6 +3,8 @@ from dotenv import dotenv_values
 
 config = dotenv_values(".env")
 
+print(config)
+
 class Client(discord.Client):
     async def on_ready(self):
         print(f'Logged on As {self.user}')
@@ -14,4 +16,4 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 client = Client(intents=intents)
-client.run(config.DISCORD_KEY)
+client.run(config['DISCORD_KEY'])
