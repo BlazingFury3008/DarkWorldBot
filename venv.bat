@@ -16,6 +16,7 @@ python -m venv "%VENV_DIR%"
 
 :: Step 3: Activate virtual environment
 call "%VENV_DIR%\Scripts\activate.bat"
+python -m pip install --upgrade pip
 
 :: Step 4: Install from requirements.txt if it exists
 if exist "requirements.txt" (
