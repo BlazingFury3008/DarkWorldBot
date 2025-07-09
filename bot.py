@@ -10,6 +10,7 @@ config = dotenv_values(".env")
 
 # Setup Discord Intents
 intents = discord.Intents.default()
+intents.members = True
 intents.message_content = True
 
 # Create the bot instance
