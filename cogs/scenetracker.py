@@ -62,7 +62,7 @@ class SceneTracker(commands.Cog):
             db.refresh(scene)
 
             await initial_message.edit(
-                content=f"```Scene #{scene.sceneID}\n{name}```\n**Players:** {mentions}"
+                content=f"```Scene #{scene.sceneID}\n{name}```{mentions}"
             )
             await interaction.followup.send(f"Scene #{scene.sceneID} created.", ephemeral=True)
         except Exception as e:
@@ -79,7 +79,7 @@ class SceneTracker(commands.Cog):
         try:
             scenes = db.query(Scene).all()
             if not scenes:
-                await interaction.followup.send("There are no scenes.", ephemeral=True)
+                await interaction.followup.send("There are no scenes.")
                 return
 
             lines = []
@@ -87,10 +87,10 @@ class SceneTracker(commands.Cog):
                 user_mentions = " ".join([f"<@{uid}>" for uid in s.users])
                 line = f"**#{s.sceneID}:** [`{s.sceneName}`]({s.start}) — {user_mentions}"
                 if s.end:
-                    line += f"\nEnded: [View End Message]({s.end})"
+                    line += f"- Ended: [View End Message]({s.end})"
                 lines.append(line)
 
-            await interaction.followup.send("\n\n".join(lines), ephemeral=True)
+            await interaction.followup.send("\n\n".join(lines))
         except Exception as e:
             print(f"Error listing scenes: {e}")
             await interaction.followup.send("Could not list scenes.", ephemeral=True)
