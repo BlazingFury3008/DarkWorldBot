@@ -11,7 +11,7 @@ class Helper(commands.Cog):
 
     @helper.command(name="resync", description="resync commands")
     async def resync(self, interaction:discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         await self.bot.tree.sync()
         print("Commands Synced")
-        await interaction.followup.send("Synced Commands")
+        await interaction.followup.send("Synced Commands", ephemeral=True)

@@ -59,7 +59,12 @@ class Character:
             self.last_updated = datetime.utcnow().isoformat()
         else:
             logger.info("No cached character → fetching from Google Sheets")
-            self.refetch_data()
+            client = get_client()
+            spreadsheet = client.open_by_url(self.SHEET_URL)
+            worksheet = spreadsheet.get_worksheet_by_id(0)
+            self.sheet_values = worksheet.get_all_values()
+            self.get_all_data()
+            logger.info("All data gathered")
 
     # ----------------------------
     # Data Loading
@@ -87,6 +92,33 @@ class Character:
 
         # Update timestamp
         self.last_updated = datetime.utcnow().isoformat()
+
+    @classmethod
+    def load_by_name(cls, name: str, user_id: str) -> Optional["Character"]:
+        """Load a character by name and user_id from the DB."""
+        conn = sqlite3.connect("characters.db")
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT data FROM parsed_characters
+            WHERE user_id = ? AND json_extract(data, '$.name') = ?
+            """,
+            (user_id, name),
+        )
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        data = json.loads(row[0])
+
+        # Bypass __init__ so we don't refetch from Sheets
+        char = cls.__new__(cls)
+        for k, v in data.items():
+            setattr(char, k, v)
+
+        return char
 
     def needs_refresh(self, max_age_minutes: int = 60) -> bool:
         """Check if cached data is older than max_age_minutes"""
@@ -363,16 +395,20 @@ class Character:
         # Parse everything
         self.get_all_data()
         # Save parsed dict to DB
-        self.save_parsed()
+        self.save_parsed(update=True)
 
-    def save_parsed(self):
-        """Save all parsed attributes into the DB"""
-        data = {
-            k: v
-            for k, v in self.__dict__.items()
-            if k not in ("sheet_values",)  # exclude heavy/raw cache
-        }
-        save_character_json(self.uuid, self.user_id, data)
+    def save_parsed(self, keyword: str = None, update=True):
+            data = {
+                k: v for k, v in self.__dict__.items()
+                if k not in ("sheet_values",)
+            }
+
+            # Auto-generate keyword if not passed
+            if not keyword:
+                keyword = (self.name or self.uuid).lower().replace(" ", "")
+
+            save_character_json(self.uuid, self.user_id, data, keyword)
+            return 0
 
 
     def to_dict(self) -> dict:

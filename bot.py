@@ -3,7 +3,8 @@ from discord.ext import commands  # Use 'commands' directly instead of importing
 from dotenv import dotenv_values
 import asyncio
 
-from cogs import helper,character
+from cogs import helper, character, tupper
+from libs.database_loader import init_db
 
 # Load configuration from .env
 config = dotenv_values(".env")
@@ -30,10 +31,12 @@ async def register_bot():
     #await bot.add_cog(scenetracker.SceneTracker(bot))
     await bot.add_cog(helper.Helper(bot))
     await bot.add_cog(character.CharacterCog(bot))
+    await bot.add_cog(tupper.Tupper(bot))
 
 # Entrypoint
 if __name__ == "__main__":
     async def main():
+        init_db()
         await register_bot()
         await bot.start(config['DISCORD_KEY'])
 
