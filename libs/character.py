@@ -49,6 +49,8 @@ class Character:
         self.user_id = user_id or ""
         self.SHEET_URL = SHEET_URL
         self.last_updated = None
+        self.curr_blood = 0
+        self.curr_willpower = 0
 
         cached = load_character_json(self.uuid, self.user_id) if use_cache else None
 
@@ -64,6 +66,9 @@ class Character:
             worksheet = spreadsheet.get_worksheet_by_id(0)
             self.sheet_values = worksheet.get_all_values()
             self.get_all_data()
+            self.curr_blood = self.max_blood
+            self.curr_willpower = self.max_willpower
+            self.save_parsed()
             logger.info("All data gathered")
 
     # ----------------------------
@@ -356,7 +361,7 @@ class Character:
         self.flaws = [f for f in self.flaws if f and f.get("name")]
 
         # Derived stats
-        self.max_willpower = self.get_dot_trait("AM91", 10).get("value")
+        self.max_willpower = self.get_dot_trait("AM91", 11).get("value")
         self.max_blood = blood_gen.get(self.generation, {}).get("max_blood")
         self.blood_per_turn = blood_gen.get(self.generation, {}).get("bpt")
 
@@ -566,3 +571,7 @@ class Character:
         """Reset temporary values like current willpower and blood"""
         self.curr_willpower = self.max_willpower
         self.curr_blood = self.max_blood
+        
+    def reset_willpower(self):
+        self.curr_willpower = self.max_willpower
+

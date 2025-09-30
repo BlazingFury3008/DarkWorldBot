@@ -1,16 +1,12 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
+from discord import app_commands, Role
 from libs.character import *
 import logging
+from bot import config
+import ast
 
 logger = logging.getLogger(__name__)
-
-# ---- Autocomplete helper ----
-
-
-
-
 
 class CharacterCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -20,6 +16,8 @@ class CharacterCog(commands.Cog):
     character = app_commands.Group(
         name="character", description="All character commands"
     )
+
+    # ---- Autocomplete helper ----
 
     async def _character_name_autocomplete(
         self, interaction: discord.Interaction, current: str
@@ -36,6 +34,7 @@ class CharacterCog(commands.Cog):
             for n in names if current.lower() in n.lower()
         ][:25]
 
+    # -- Init Character -- #
     @character.command(name="init", description="Add A Character")
     async def init(self, interaction: discord.Interaction, url: str):
         """Initialise a character into the database"""
@@ -43,6 +42,7 @@ class CharacterCog(commands.Cog):
         try:
             user_id = str(interaction.user.id)
             char = Character(user_id=user_id, SHEET_URL=url)
+            char.reset_temp()
             logger.info("Character Fetched")
 
             keyword = (char.name or char.uuid).lower().replace(" ", "")
@@ -74,7 +74,8 @@ class CharacterCog(commands.Cog):
                 f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
             )
 
-
+    
+    # -- Show Character -- #
     @character.command(name="show", description="Show one of your saved characters")
     @app_commands.describe(name="Pick the character to display")
     async def show(self, interaction: discord.Interaction, name: str):
@@ -108,10 +109,10 @@ class CharacterCog(commands.Cog):
             embed.add_field(
                 name="Bane", value=char.bane or "None", inline=False)
 
-            embed.add_field(name="Max Willpower", value=str(
-                char.max_willpower or 0), inline=True)
+            embed.add_field(name=" Willpower", 
+                            value=f'{str(char.curr_willpower or 0)}/{str(char.max_willpower or 0)}', inline=True)
             embed.add_field(
-                name="Blood Pool", value=f"{char.max_blood or '?'} (BPT: {char.blood_per_turn or '?'})", inline=True)
+                name="Blood Pool", value=f"{char.curr_blood or '?'}/{char.max_blood or '?'} (Blood Per Turn: {char.blood_per_turn or '?'})", inline=True)
 
             if char.disciplines:
                 disc_text = "\n".join(
@@ -211,4 +212,140 @@ class CharacterCog(commands.Cog):
 
     @keyword.autocomplete("name")
     async def keyword_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self._character_name_autocomplete(interaction, current)
+
+
+    @character.command(name="reset", description="Weekly reset of characters")
+    async def reset_all(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        raw_roles = config.get("ROLES", "[]")
+        try:
+            allowed_roles = ast.literal_eval(raw_roles)  # safely parse into a list
+        except Exception:
+            allowed_roles = [r.strip() for r in raw_roles.split(",")]
+        user_roles = [r.name for r in getattr(interaction.user, "roles", [])]
+
+        logger.info(f"[RESET] Allowed roles: {allowed_roles}")
+        logger.info(f"[RESET] User {interaction.user} roles: {user_roles}")
+
+        # Check each comparison explicitly
+        match_found = False
+        for allowed in allowed_roles:
+            for user_role in user_roles:
+                logger.debug(f"[RESET] Comparing allowed '{allowed}' with user role '{user_role}'")
+                if allowed == user_role:
+                    logger.info(f"[RESET] Match found: '{allowed}'")
+                    match_found = True
+
+        if not match_found:
+            logger.warning(f"[RESET] User {interaction.user} has no matching roles.")
+            await interaction.followup.send("You do not have the correct role!", ephemeral=True)
+            return
+
+        logger.info(f"[RESET] User {interaction.user} passed role check.")
+        chars = get_all_characters()
+        try:
+            for char in chars:
+                c = Character(str_uuid=char["uuid"], user_id=char["user_id"], use_cache=True)
+                c.refetch_data()
+                c.reset_willpower()
+                c.save_parsed()
+                
+            await interaction.followup.send("Done!")
+        except Exception as e:
+            await interaction.followup.send(f"Error occurred {e}")
+
+
+ # --- Adjust Blood ---
+    @character.command(name="adjust-blood", description="Adjust a character's blood pool (+/-)")
+    @app_commands.describe(
+        name="Character name",
+        amount="Amount of blood to adjust (use negative for spending)",
+        comment="Reason for the change (e.g. 'fed from X' or 'used X')"
+    )
+    async def adjust_blood(self, interaction: discord.Interaction, name: str, amount: int, comment: str):
+        await interaction.response.defer(ephemeral=True)
+
+        char_uuid = get_character_uuid_by_name(str(interaction.user.id), name)
+        char = Character(str_uuid=char_uuid, user_id=interaction.user.id, use_cache=True)
+
+        # Ensure blood tracking exists
+        if not hasattr(char, "curr_blood") or char.curr_blood is None:
+            char.curr_blood = char.max_blood
+        if not hasattr(char, "blood_log"):
+            char.blood_log = []
+
+        # Apply adjustment
+        new_blood = char.curr_blood + amount
+        if new_blood < 0:
+            new_blood = 0
+        elif new_blood > char.max_blood:
+            new_blood = char.max_blood
+
+        delta = new_blood - char.curr_blood
+        char.curr_blood = new_blood
+
+        # Log entry
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "delta": delta,
+            "comment": comment,
+            "result": char.curr_blood,
+        }
+        char.blood_log.append(entry)
+        char.save_parsed()
+
+        # Hunger Torpor trigger
+        if char.curr_blood == 0:
+            role_names = config.get("ROLES", [])
+            guild_roles: list[Role] = interaction.guild.roles
+            mentions = " ".join([r.mention for r in guild_roles if r.name in role_names]) or ""
+            await interaction.followup.send(
+                f"{mentions} ⚠️ {char.name} has exerted too much blood and has fallen into **Hunger Torpor**!",
+                ephemeral=False,
+            )
+            return
+
+        await interaction.followup.send(
+            f"{char.name} blood adjusted by {delta} ({comment}). Current pool: {char.curr_blood}/{char.max_blood}.",
+            ephemeral=True
+        )
+
+    @adjust_blood.autocomplete("name")
+    async def adjust_blood_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self._character_name_autocomplete(interaction, current)
+
+    # --- Show Blood Logs ---
+    @character.command(name="blood-logs", description="Show recent blood log entries for a character")
+    @app_commands.describe(name="Character name")
+    async def blood_logs(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer(ephemeral=False)
+
+        char_uuid = get_character_uuid_by_name(str(interaction.user.id), name)
+        char = Character(str_uuid=char_uuid, user_id=interaction.user.id, use_cache=True)
+
+        if not hasattr(char, "blood_log") or not char.blood_log:
+            await interaction.followup.send(f"No blood log found for {char.name}.", ephemeral=True)
+            return
+
+        # Show last 10 entries
+        last_entries = char.blood_log[-10:]
+        log_text = "\n".join(
+            f"[{e['timestamp']}] {'+' if e['delta']>=0 else ''}{e['delta']}, {e['comment']} → {e['result']}"
+            for e in last_entries
+        )
+
+        embed = discord.Embed(
+            title=f"{char.name} - Blood Log",
+            description=f"Recent changes to {char.name}'s blood pool",
+            color=discord.Color.red(),
+        )
+        embed.add_field(name="Log", value=f"```{log_text}```", inline=False)
+        embed.set_footer(text=f"User: {interaction.user.display_name}")
+
+        await interaction.followup.send(embed=embed)
+
+    @blood_logs.autocomplete("name")
+    async def blood_logs_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
