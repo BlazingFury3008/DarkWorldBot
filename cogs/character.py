@@ -74,8 +74,7 @@ class CharacterCog(commands.Cog):
                 f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
             )
 
-    
-    # -- Show Character -- #
+
     @character.command(name="show", description="Show one of your saved characters")
     @app_commands.describe(name="Pick the character to display")
     async def show(self, interaction: discord.Interaction, name: str):
@@ -213,6 +212,51 @@ class CharacterCog(commands.Cog):
     @keyword.autocomplete("name")
     async def keyword_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
+
+
+    @character.command(name="reset", description="Weekly reset of characters")
+    async def reset_all(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        raw_roles = config.get("ROLES", "[]")
+        try:
+            allowed_roles = ast.literal_eval(raw_roles)  # safely parse into a list
+        except Exception:
+            allowed_roles = [r.strip() for r in raw_roles.split(",")]
+        user_roles = [r.name for r in getattr(interaction.user, "roles", [])]
+
+        logger.info(f"[RESET] Allowed roles: {allowed_roles}")
+        logger.info(f"[RESET] User {interaction.user} roles: {user_roles}")
+
+        # Check each comparison explicitly
+        match_found = False
+        for allowed in allowed_roles:
+            for user_role in user_roles:
+                logger.debug(f"[RESET] Comparing allowed '{allowed}' with user role '{user_role}'")
+                if allowed == user_role:
+                    logger.info(f"[RESET] Match found: '{allowed}'")
+                    match_found = True
+
+        if not match_found:
+            logger.warning(f"[RESET] User {interaction.user} has no matching roles.")
+            await interaction.followup.send("You do not have the correct role!", ephemeral=True)
+            return
+
+        logger.info(f"[RESET] User {interaction.user} passed role check.")
+        chars = get_all_characters()
+        try:
+            for char in chars:
+                c = Character(str_uuid=char["uuid"], user_id=char["user_id"], use_cache=True)
+                c.refetch_data()
+                c.reset_willpower()
+                c.save_parsed()
+                
+            await interaction.followup.send("Done!")
+        except Exception as e:
+            await interaction.followup.send(f"Error occurred {e}")
+                
+
+        
 
 
     @character.command(name="reset", description="Weekly reset of characters")
