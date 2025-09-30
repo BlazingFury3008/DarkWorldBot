@@ -3,6 +3,8 @@ from discord.ext import commands
 from discord import app_commands
 from libs.character import *
 import logging
+from bot import config
+import ast
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,7 @@ class CharacterCog(commands.Cog):
         try:
             user_id = str(interaction.user.id)
             char = Character(user_id=user_id, SHEET_URL=url)
+            char.reset_temp()
             logger.info("Character Fetched")
 
             keyword = (char.name or char.uuid).lower().replace(" ", "")
@@ -74,6 +77,8 @@ class CharacterCog(commands.Cog):
                 f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
             )
 
+    
+    # -- Show Character -- #
 
     @character.command(name="show", description="Show one of your saved characters")
     @app_commands.describe(name="Pick the character to display")
@@ -108,10 +113,10 @@ class CharacterCog(commands.Cog):
             embed.add_field(
                 name="Bane", value=char.bane or "None", inline=False)
 
-            embed.add_field(name="Max Willpower", value=str(
-                char.max_willpower or 0), inline=True)
+            embed.add_field(name=" Willpower", 
+                            value=f'{str(char.curr_willpower or 0)}/{str(char.max_willpower or 0)}', inline=True)
             embed.add_field(
-                name="Blood Pool", value=f"{char.max_blood or '?'} (BPT: {char.blood_per_turn or '?'})", inline=True)
+                name="Blood Pool", value=f"{char.curr_blood or '?'}/{char.max_blood or '?'} (Blood Per Turn: {char.blood_per_turn or '?'})", inline=True)
 
             if char.disciplines:
                 disc_text = "\n".join(
@@ -212,3 +217,48 @@ class CharacterCog(commands.Cog):
     @keyword.autocomplete("name")
     async def keyword_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
+
+
+    @character.command(name="reset", description="Weekly reset of characters")
+    async def reset_all(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        raw_roles = config.get("ROLES", "[]")
+        try:
+            allowed_roles = ast.literal_eval(raw_roles)  # safely parse into a list
+        except Exception:
+            allowed_roles = [r.strip() for r in raw_roles.split(",")]
+        user_roles = [r.name for r in getattr(interaction.user, "roles", [])]
+
+        logger.info(f"[RESET] Allowed roles: {allowed_roles}")
+        logger.info(f"[RESET] User {interaction.user} roles: {user_roles}")
+
+        # Check each comparison explicitly
+        match_found = False
+        for allowed in allowed_roles:
+            for user_role in user_roles:
+                logger.debug(f"[RESET] Comparing allowed '{allowed}' with user role '{user_role}'")
+                if allowed == user_role:
+                    logger.info(f"[RESET] Match found: '{allowed}'")
+                    match_found = True
+
+        if not match_found:
+            logger.warning(f"[RESET] User {interaction.user} has no matching roles.")
+            await interaction.followup.send("You do not have the correct role!", ephemeral=True)
+            return
+
+        logger.info(f"[RESET] User {interaction.user} passed role check.")
+        chars = get_all_characters()
+        try:
+            for char in chars:
+                c = Character(str_uuid=char["uuid"], user_id=char["user_id"], use_cache=True)
+                c.refetch_data()
+                c.reset_willpower()
+                c.save_parsed()
+                
+            await interaction.followup.send("Done!")
+        except Exception as e:
+            await interaction.followup.send(f"Error occurred {e}")
+                
+
+        
