@@ -62,13 +62,20 @@ def save_character_json(uuid: str, user_id: str, data: dict, keyword: str = None
     )
 
 
-def load_character_json(uuid: str, user_id: str) -> dict | None:
-    """Load character JSON by uuid + user"""
-    row = execute_query(
-        "SELECT data FROM parsed_characters WHERE uuid = ? AND user_id = ?",
-        (uuid, user_id),
-        fetchone=True,
-    )
+def load_character_json(uuid: str, user_id: str | None = None) -> dict | None:
+    """Load character JSON by uuid (optionally filtered by user_id)"""
+    if user_id:
+        row = execute_query(
+            "SELECT data FROM parsed_characters WHERE uuid = ? AND user_id = ?",
+            (uuid, user_id),
+            fetchone=True,
+        )
+    else:
+        row = execute_query(
+            "SELECT data FROM parsed_characters WHERE uuid = ?",
+            (uuid,),
+            fetchone=True,
+        )
     return json.loads(row[0]) if row else None
 
 
@@ -94,6 +101,16 @@ def list_characters_for_user(user_id: str) -> list[str]:
     )
     return [r[0] for r in rows if r and r[0]]
 
+def list_all_characters() -> list[dict]:
+    """List all characters with uuid, name, and user_id."""
+    rows = execute_query(
+        "SELECT uuid, user_id, json_extract(data, '$.name') FROM parsed_characters",
+        fetchall=True,
+    )
+    return [
+        {"uuid": r[0], "user_id": r[1], "name": r[2]}
+        for r in rows if r and r[0] and r[2]
+    ]
 
 def update_character_field(uuid: str, user_id: str, field: str, value: str) -> bool:
     """Update a single column (not JSON) for a character"""

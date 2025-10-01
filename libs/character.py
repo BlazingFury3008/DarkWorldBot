@@ -445,7 +445,7 @@ class Character:
         }
 
     @classmethod
-    def load_parsed(cls, uuid: str, user_id: str) -> Optional["Character"]:
+    def load_parsed(cls, uuid: str, user_id: str | None = None) -> Optional["Character"]:
         """Load from parsed DB only, without hitting Google Sheets"""
         data = load_character_json(uuid, user_id)
         if not data:
