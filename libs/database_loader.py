@@ -41,7 +41,8 @@ def init_db():
             user_id TEXT,
             data TEXT,
             last_updated TEXT,
-            keyword TEXT
+            keyword TEXT,
+            macro TEXT
         )
         """,
         commit=True,
@@ -180,3 +181,15 @@ def get_all_characters() -> list[dict]:
             "data": data
         })
     return chars
+
+def get_character_macro(char_id: str) -> str:
+    """Get all Dice Macros for a given character
+
+    Args:
+        char_id (str): _description_
+
+    Returns:
+        str: All Macro's for a character
+    """
+    row = execute_query("SELECT macro from parsed_characters where uuid = ?", (char_id,), fetchone=True)
+    return row[0] if row else None
