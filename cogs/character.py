@@ -382,105 +382,68 @@ class CharacterCog(commands.Cog):
             guild_roles: list[Role] = interaction.guild.roles
             mentions = " ".join([r.mention for r in guild_roles if r.name in role_names]) or ""
             await interaction.followup.send(
-                f"{mentions} ⚠️ {char.name} has exerted too much blood and has fallen into **Hunger Torpor**!",
+                f"{mentions} - {char.name} has exerted too much blood and has fallen into **Hunger Torpor**!",
                 ephemeral=False,
             )
             return
 
         await interaction.followup.send(
-            f"✅ {char.name} blood adjusted by {delta} ({comment}). "
+            f"{char.name} blood adjusted by {delta} ({comment}). "
             f"Current pool: {char.curr_blood}/{char.max_blood}.",
-            ephemeral=True,
         )
 
     @adjust_blood.autocomplete("name")
     async def adjust_blood_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
+    
 
-
-    # ---------------------------
+    # --------------------------
     # Show Blood Logs
-    # ---------------------------
-    @character.command(name="blood-logs", description="Show recent blood log entries for a character")
-    @app_commands.describe(char_id="Pick the character (UUID)")
-    async def blood_logs(self, interaction: discord.Interaction, char_id: str):
-        """Display recent blood log entries for a character"""
+    # --------------------------
+    @character.command(name="blood-log", description="Show character blood-log")
+    @app_commands.describe(uuid="Character to display")
+    async def blood_log(self, interaction: discord.Interaction, uuid: str):
         await interaction.response.defer(ephemeral=False)
 
-        char = Character.load_parsed(char_id)
+        char = get_character_by_uuid(uuid)
         if not char:
-            await interaction.followup.send("Character not found in database.", ephemeral=True)
+            await interaction.followup.send("Character not found.", ephemeral=True)
             return
 
-        if not hasattr(char, "blood_log") or not char.blood_log:
+        logs = char.get("blood_log", [])
+        if not logs:
             await interaction.followup.send(
-                f"No blood log found for {getattr(char, 'name', 'Unknown')}.",
-                ephemeral=True,
+                f"No blood logs for {char.get('name','Unknown')}.", ephemeral=True
             )
             return
 
-        # Show last 10 entries
-        last_entries = char.blood_log[-10:]
-        log_text = "\n".join(
-            f"[{e['timestamp']}] {'+' if e['delta'] >= 0 else ''}{e['delta']}, "
-            f"{e['comment']} → {e['result']} (by <@{e['user']}>)"
-            for e in last_entries
-        )
+        # Header row
+        table_lines = ["```", f"Blood Log — {char.get('name','Unknown')} ({char.get('player_name','?')})", ""]
+        table_lines.append(f"{'Time':<20} {'Δ':>3} {'Result':>6}  Comment")
+        table_lines.append("-" * 60)
 
-        embed = discord.Embed(
-            title=f"{char.name} - Blood Log",
-            description=f"Recent changes to {char.name}'s blood pool",
-            color=discord.Color.red(),
-        )
-        embed.add_field(name="Log", value=f"```{log_text}```", inline=False)
-        embed.set_footer(text=f"UUID: {char.uuid}")
+        # Show last 15 logs (newest first)
+        for log in logs[-15:][::-1]:
+            ts = log.get("timestamp", "unknown")
+            delta = log.get("delta", 0)
+            result = log.get("result", "?")
+            comment = log.get("comment", "")
+            table_lines.append(f"{ts:<20} {delta:>+3} {result:>6}  {comment}")
 
-        await interaction.followup.send(embed=embed)
+        table_lines.append("```")
+        await interaction.followup.send("\n".join(table_lines))
 
-    @blood_logs.autocomplete("char_id")
-    async def blood_logs_autocomplete(
-        self, interaction: discord.Interaction, current: str
-    ) -> list[app_commands.Choice[str]]:
+
+    @blood_log.autocomplete("uuid")
+    async def blood_log_autocomplete(self, interaction: discord.Interaction, current: str):
+        """Autocomplete character names"""
         try:
-            chars = list_all_characters() or []
-            logger.debug(f"Autocomplete pulled {len(chars)} chars")
+            names = list_all_characters() or []
+            logger.debug(f"Autocomplete names for: {names}")
         except Exception as e:
-            logger.error(f"Autocomplete error: {e}", exc_info=True)
-            return []
-
-        choices: list[app_commands.Choice[str]] = []
-        for c in chars:
-            try:
-                # Defensive: ensure required keys exist
-                name = c.get("name", "Unknown")
-                uuid = c.get("uuid", "???")
-                uid = c.get("user_id")
-
-                member = None
-                if interaction.guild and uid:
-                    try:
-                        member = interaction.guild.get_member(int(uid))
-                    except Exception:
-                        pass
-                username = member.display_name if member else str(uid or "Unknown")
-
-                if current.lower() in name.lower() or current.lower() in uuid.lower():
-                    choices.append(
-                        app_commands.Choice(
-                            name=f"{name} ({username})",
-                            value=uuid,
-                        )
-                    )
-            except Exception as inner_e:
-                logger.error(f"Error processing character {c}: {inner_e}")
-
-        logger.debug(f"Returning {len(choices)} autocomplete choices")
-        return choices[:25]
-    
-    # ---------------------------
-    # Hunt
-    # ---------------------------
-    #@character.command(name="hunt", description="Roll to hunt for the character")
-    #@app_commands.describe(roll="Dice roller or Macro for hunting")
-    #async def hunt(self, interaction: discord.Interaction, roll: str):
-        
+            logger.error(f"Autocomplete error: {e}")
+            names = []
+        return [
+            app_commands.Choice(name=f"{n['name']} | {n['player_name']}", value=n["uuid"])
+            for n in names if current.lower() in n['name'].lower()
+        ][:25]

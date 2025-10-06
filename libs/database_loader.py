@@ -103,15 +103,29 @@ def list_characters_for_user(user_id: str) -> list[str]:
     return [r[0] for r in rows if r and r[0]]
 
 def list_all_characters() -> list[dict]:
-    """List all characters with uuid, name, and user_id."""
+    """List all characters with uuid, name, player_name, and user_id."""
     rows = execute_query(
-        "SELECT uuid, user_id, json_extract(data, '$.name') FROM parsed_characters",
+        "SELECT uuid, user_id, data FROM parsed_characters",
         fetchall=True,
     )
-    return [
-        {"uuid": r[0], "user_id": r[1], "name": r[2]}
-        for r in rows if r and r[0] and r[2]
-    ]
+
+    characters = []
+    for r in rows:
+        if not r or not r[0] or not r[2]:
+            continue
+        try:
+            data = json.loads(r[2])
+        except Exception:
+            continue
+
+        characters.append({
+            "uuid": r[0],
+            "user_id": r[1],
+            "name": data.get("name", "Unknown"),
+            "player_name": data.get("player_name", "Unknown"),
+        })
+
+    return characters
 
 def update_character_field(uuid: str, user_id: str, field: str, value: str) -> bool:
     """Update a single column (not JSON) for a character"""
@@ -193,3 +207,18 @@ def get_character_macro(char_id: str) -> str:
     """
     row = execute_query("SELECT macro from parsed_characters where uuid = ?", (char_id,), fetchone=True)
     return row[0] if row else None
+
+def get_character_by_uuid(uuid: str) -> dict | None:
+    """Return single character dict by UUID (parsed JSON data)."""
+    rows = execute_query(
+        "SELECT data FROM parsed_characters WHERE uuid = ?",
+        (uuid,),
+        fetchall=True,
+    )
+    if not rows:
+        return None
+    try:
+        return json.loads(rows[0][0])
+    except Exception:
+        return None
+
