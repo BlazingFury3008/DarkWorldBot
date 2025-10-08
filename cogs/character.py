@@ -315,8 +315,9 @@ class CharacterCog(commands.Cog):
                     f"No character named `{name}` found.", ephemeral=True
                 )
                 return
+
             char.refetch_data()
-            
+
             base_username = interaction.user.name
             new_nick = f"{char.name} || {base_username}"
 
@@ -324,11 +325,23 @@ class CharacterCog(commands.Cog):
             if isinstance(member, discord.Member):
                 try:
                     await member.edit(nick=new_nick)
-                except discord.Forbidden:
-                    await interaction.followup.send("Unable to change nickname", ephemeral=True)
+                except discord.Forbidden as e:
+                    # Print the reason to the console for debugging
+                    print(f"[Nickname Change Forbidden] Could not change nickname for {member} ({member.id}): {e}")
+                    await interaction.followup.send(
+                        "Character resynced, but I don't have permission to change your nickname.",
+                        ephemeral=True
+                    )
+                except discord.HTTPException as e:
+                    # Catch other HTTP errors
+                    print(f"[Nickname Change HTTP Error] Could not change nickname for {member} ({member.id}): {e}")
+                    await interaction.followup.send(
+                        "Character resynced, but an error occurred while changing the nickname.",
+                        ephemeral=True
+                    )
 
-            
             await interaction.followup.send("Resynced successfully!", ephemeral=True)
+
         except Exception as e:
             await interaction.followup.send(
                 f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
