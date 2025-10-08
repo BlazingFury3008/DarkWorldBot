@@ -31,7 +31,7 @@ async def register_bot():
     #await bot.add_cog(scenetracker.SceneTracker(bot))
     await bot.add_cog(helper.Helper(bot))
     await bot.add_cog(character.CharacterCog(bot))
-    await bot.add_cog(tupper.Tupper(bot))
+    #await bot.add_cog(tupper.Tupper(bot))
 
 # Entrypoint
 if __name__ == "__main__":

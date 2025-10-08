@@ -85,69 +85,209 @@ class CharacterCog(commands.Cog):
                 f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
             )
 
-    # ---------------------------
-    # Show Character (WIP)
-    # ---------------------------
     @character.command(name="show", description="See the overview of one of your saved characters")
     @app_commands.describe(name="Pick the character to display")
     async def show(self, interaction: discord.Interaction, name: str):
-        """Show details of a saved character"""
+        """Show details of a saved character across up to 3 pages"""
         await interaction.response.defer(ephemeral=True)
         try:
             user_id = str(interaction.user.id)
             char = Character.load_by_name(name, user_id)
+
             if not char:
                 await interaction.followup.send(
                     f"No character named `{name}` found.", ephemeral=True
                 )
                 return
 
-            # Build character embed
-            embed = discord.Embed(
+            # === PAGE 1 ===
+            page1 = discord.Embed(
                 title=f"{char.name or 'Unknown'}",
                 description=f"Player: {char.player_name or 'Unknown'}",
                 color=discord.Color.dark_red(),
             )
-            embed.add_field(name="Clan", value=char.clan or "Unknown", inline=True)
-            embed.add_field(name="Generation", value=str(char.generation or "?"), inline=True)
-            embed.add_field(name="Sect", value=char.sect or "Unknown", inline=True)
+            page1.add_field(name="Clan", value=char.clan or "Unknown", inline=True)
+            page1.add_field(name="Generation", value=str(char.generation or "?"), inline=True)
+            page1.add_field(name="Sect", value=char.sect or "Unknown", inline=True)
 
-            embed.add_field(name="Concept", value=char.concept or "Unknown", inline=False)
-            embed.add_field(name="Nature/Demeanor",
-                            value=f"{char.nature or '?'} / {char.demeanor or '?'}", inline=False)
-            embed.add_field(name="Bane", value=char.bane or "None", inline=False)
+            page1.add_field(name="Concept", value=char.concept or "Unknown", inline=False)
+            page1.add_field(
+                name="Nature / Demeanor",
+                value=f"{char.nature or '?'} / {char.demeanor or '?'}",
+                inline=False,
+            )
 
-            embed.add_field(
+            # Willpower / Blood Pool
+            page1.add_field(
                 name="Willpower",
-                value=f"{str(char.curr_willpower or 0)}/{str(char.max_willpower or 0)}",
+                value=f"{char.curr_willpower}/{char.max_willpower}",
                 inline=True,
             )
-            embed.add_field(
+            page1.add_field(name="", value="", inline=True, ) # For Formatting
+            
+            page1.add_field(
                 name="Blood Pool",
-                value=f"{char.curr_blood or '?'}/{char.max_blood or '?'} "
-                      f"(Blood Per Turn: {char.blood_per_turn or '?'})",
+                value=f"{char.curr_blood}/{char.max_blood} (Per Turn: {char.blood_per_turn})",
                 inline=True,
             )
 
+            # === Attributes (3 Columns: Physical, Social, Mental) ===
+            if char.attributes and len(char.attributes) >= 9:
+                physical = char.attributes[0:3]
+                social = char.attributes[3:6]
+                mental = char.attributes[6:9]
+
+                def format_attr_block(block):
+                    return "\n".join(
+                        f"**{a['name']}** {a['value']}"
+                        for a in block
+                    )
+
+                page1.add_field(name="Physical", value=format_attr_block(physical), inline=True)
+                page1.add_field(name="Social", value=format_attr_block(social), inline=True)
+                page1.add_field(name="Mental", value=format_attr_block(mental), inline=True)
+
+            # === Abilities (2 Rows × 3 Columns) ===
+            ability_order = [
+                ("Talents", "Talents"),
+                ("Skills", "Skills"),
+                ("Knowledges", "Knowledges"),
+                ("Hobby Talents", "Hobby Talents"),
+                ("Professional Skill", "Professional Skill"),
+                ("Expert Knowledge", "Expert Knowledge"),
+            ]
+
+            def format_abilities(cat):
+                if cat not in char.abilities:
+                    return None
+                entries = [
+                    f"**{a['name']}** {a['value']}"
+                    for a in char.abilities[cat] if a['value'] > 0
+                ]
+                return "\n".join(entries) if entries else None
+
+            for i, (cat, display) in enumerate(ability_order):
+                text = format_abilities(cat)
+                if text:
+                    page1.add_field(name=display, value=text[:1024], inline=True)
+                else:
+                    # Add blank field to keep column alignment
+                    page1.add_field(name=display, value="—", inline=True)
+
+            page1.set_footer(text=f"User: {interaction.user.display_name}")
+
+            # === PAGE 2 ===
+            page2 = discord.Embed(
+                title=f"{char.name or 'Unknown'}",
+                description="Disciplines, Backgrounds, Merits, Flaws, Virtues, Path",
+                color=discord.Color.dark_red(),
+            )
+
+            # Disciplines
+            disc_text = ""
             if char.disciplines:
                 disc_text = "\n".join(f"**{d['name']}** {d['value']}" for d in char.disciplines)
-                embed.add_field(name="Disciplines", value=disc_text[:1024], inline=False)
+            if disc_text:
+                page2.add_field(name="Disciplines", value=disc_text[:1024], inline=False)
+
+            # Backgrounds | Merits | Flaws (3 inline)
+            back_text = None
+            merits_text = None
+            flaws_text = None
 
             if char.backgrounds:
                 back_text = "\n".join(f"**{b['name']}** {b['value']}" for b in char.backgrounds)
-                embed.add_field(name="Backgrounds", value=back_text[:1024], inline=False)
 
             if char.merits:
-                merits_text = "\n".join(f"{m['name']} ({m['rating']}pt)" for m in char.merits)
-                embed.add_field(name="Merits", value=merits_text[:1024], inline=False)
+                merits_text = "\n".join(
+                    f"{m['name'].split('(')[0]} ({m['rating']}pt)" for m in char.merits
+                )
 
             if char.flaws:
-                flaws_text = "\n".join(f"{f['name']} ({f['rating']}pt)" for f in char.flaws)
-                embed.add_field(name="Flaws", value=flaws_text[:1024], inline=False)
+                flaws_text = "\n".join(
+                    f"{f['name'].split('(')[0]} ({f['rating']}pt)" for f in char.flaws
+                )
 
-            embed.set_footer(text=f"User: {interaction.user.display_name}")
+            if back_text:
+                page2.add_field(name="Backgrounds", value=back_text[:1024], inline=True)
+            if merits_text:
+                page2.add_field(name="Merits", value=merits_text[:1024], inline=True)
+            if flaws_text:
+                page2.add_field(name="Flaws", value=flaws_text[:1024], inline=True)
 
-            await interaction.followup.send(embed=embed)
+            # Virtues | Path (2 inline)
+            if hasattr(char, "virtues") and char.virtues:
+                virtues_text = "\n".join(f"**{v['name']}** {v['value']}" for v in char.virtues)
+                page2.add_field(name="Virtues", value=virtues_text, inline=True)
+
+            if hasattr(char, "path") and char.path:
+                page2.add_field(
+                    name="Path",
+                    value=f"**{char.path['name']}** {char.path['value']}",
+                    inline=True,
+                )
+
+            page2.set_footer(text=f"User: {interaction.user.display_name}")
+
+            # === PAGE 3 (Optional) ===
+            has_rituals = hasattr(char, "rituals") and char.rituals
+            has_paths = hasattr(char, "magic_paths") and any(p['level'] != 0 for p in char.magic_paths or [])
+
+            page3 = None
+            if has_rituals or has_paths:
+                page3 = discord.Embed(
+                    title=f"{char.name or 'Unknown'}",
+                    description="Rituals & Sorcery Paths",
+                    color=discord.Color.dark_red(),
+                )
+
+                if has_paths:
+                    paths_text = "\n".join(
+                        f"**{p['name'].split('(')[0]}** {p['level']}" for p in char.magic_paths if p['level'] != 0
+                    )
+                    page3.add_field(name="Paths", value=paths_text[:1024], inline=False)
+                    
+                if has_rituals:
+                    rituals_text = "\n".join(
+                        f"**{r['name']}** (Lvl {r['level']})" for r in char.rituals
+                    )
+                    page3.add_field(name="Rituals", value=rituals_text[:1024], inline=False)
+
+
+                page3.set_footer(text=f"User: {interaction.user.display_name}")
+
+            # === Pagination View ===
+            class CharacterView(discord.ui.View):
+                def __init__(self, has_page3: bool):
+                    super().__init__(timeout=120)
+                    self.has_page3 = has_page3
+
+                @discord.ui.button(label="Page 1", style=discord.ButtonStyle.primary, disabled=True)
+                async def page1_button(self, i2: discord.Interaction, b: discord.ui.Button):
+                    self.page1_button.disabled = True
+                    self.page2_button.disabled = False
+                    if self.has_page3:
+                        self.page3_button.disabled = False
+                    await i2.response.edit_message(embed=page1, view=self)
+
+                @discord.ui.button(label="Page 2", style=discord.ButtonStyle.primary)
+                async def page2_button(self, i2: discord.Interaction, b: discord.ui.Button):
+                    self.page1_button.disabled = False
+                    self.page2_button.disabled = True
+                    if self.has_page3:
+                        self.page3_button.disabled = False
+                    await i2.response.edit_message(embed=page2, view=self)
+
+                if has_rituals or has_paths:
+                    @discord.ui.button(label="Page 3", style=discord.ButtonStyle.primary)
+                    async def page3_button(self, i2: discord.Interaction, b: discord.ui.Button):
+                        self.page1_button.disabled = False
+                        self.page2_button.disabled = False
+                        self.page3_button.disabled = True
+                        await i2.response.edit_message(embed=page3, view=self)
+
+            view = CharacterView(page3 is not None)
+            await interaction.followup.send(embed=page1, view=view, ephemeral=True)
 
         except Exception as e:
             await interaction.followup.send(
@@ -360,7 +500,6 @@ class CharacterCog(commands.Cog):
 
         table_lines.append("```")
         await interaction.followup.send("\n".join(table_lines))
-
 
     @blood_log.autocomplete("uuid")
     async def blood_log_autocomplete(self, interaction: discord.Interaction, current: str):

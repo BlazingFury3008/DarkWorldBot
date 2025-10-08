@@ -251,5 +251,13 @@ def get_character_value(char: Character, trait_name: str, spec: str = None) -> T
         res = check_entry(entry)
         if res:
             return res[0], True, res[1]
+        
+    # 7. Special pseudo-traits
+    if trait_name_lower == "willpower":
+        return char.curr_willpower, True, False
+
+    if trait_name_lower == "willmax":
+        return char.max_willpower, True, False
+
 
     return 0, False, False

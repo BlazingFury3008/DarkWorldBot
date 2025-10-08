@@ -48,6 +48,13 @@ def roll_dice(pool: int, spec: bool, difficulty: int):
         else:
             normal.append(f"{val}")
 
-    formatted = struck + italic + normal + crit
+    formatted = struck + italic
+
+        # Only add a separator if both sides have content
+    if formatted and (normal or crit):
+        formatted.append("|")
+
+    formatted += normal + crit
+
 
     return formatted, final_suxx, botch
