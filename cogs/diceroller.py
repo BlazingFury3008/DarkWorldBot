@@ -201,3 +201,118 @@ class Diceroller(commands.Cog):
     @roll.autocomplete("name")
     async def roll_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
+
+    @app_commands.command(name="roll-help", description="Show help for the dice roller syntax")
+    async def roll_help(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="Dice Roller Help",
+            description="How to use expressions and macros with the `/roll` command.",
+            color=discord.Color.blurple()
+        )
+
+        # --- Basic Usage ---
+        embed.add_field(
+            name="Basic Syntax",
+            value=(
+                "You can roll dice using either:\n"
+                "• A **macro name** you’ve saved for your character.\n"
+                "• A **direct expression**, e.g. `Dexterity+Melee[Swords]-2`.\n\n"
+                "Format:\n"
+                "`TRAIT[Specialization]+TRAIT-Number+...`\n"
+                "You can mix traits, numbers, and specializations freely."
+            ),
+            inline=False
+        )
+
+        # --- Trait & Spec ---
+        embed.add_field(
+            name="Traits and Specializations",
+            value=(
+                "- Traits can be: attributes, abilities, disciplines, backgrounds, virtues, or magic paths.\n"
+                "- You can also use:\n"
+                "  • `Willpower` → current Willpower\n"
+                "  • `Willmax` → maximum Willpower\n\n"
+                "- Add a specialization in square brackets to apply it, for example:\n"
+                "`Melee[Swords]` will apply your Melee dots if you have `Swords` as a specialization."
+            ),
+            inline=False
+        )
+
+        # --- Examples ---
+        embed.add_field(
+            name="Examples",
+            value=(
+                "`/roll name:Zayd roll_str:Dexterity+Melee[Swords] difficulty:6`\n"
+                "→ Rolls Dexterity + Melee (with Swords spec if available) vs difficulty 6\n\n"
+                "`/roll name:Zayd roll_str:Strength+2 difficulty:7`\n"
+                "→ Rolls Strength + 2 bonus dice vs difficulty 7\n\n"
+                "`/roll name:Zayd roll_str:Attack difficulty:6`\n"
+                "→ Uses the character's saved macro named Attack"
+            ),
+            inline=False
+        )
+
+        # --- Macro Definition ---
+        embed.add_field(
+            name="Macros",
+            value=(
+                "You can define macros to avoid retyping common rolls.\n\n"
+                "Format:\n"
+                "`MacroName=Expression`\n\n"
+                "Example:\n"
+                "`Attack=Dexterity+Melee[Swords]+2`\n"
+                "Then use it with:\n"
+                "`/roll name:Zayd roll_str:Attack difficulty:6`\n\n"
+                "Macros will be managed using `/macro` commands:\n"
+                "- `/macro new name:Attack roll_str:Dexterity+Melee[Swords]+2`\n"
+                "- `/macro edit name:Attack roll_str:Strength+Melee`\n"
+                "- `/macro delete name:Attack`\n\n"
+                "Each character has their own set of macros."
+            ),
+            inline=False
+        )
+
+        # --- Expression Rules ---
+        embed.add_field(
+            name="Expression Rules",
+            value=(
+                "• Expressions must alternate between **trait/number** and **+/-** operators.\n"
+                "• Invalid tokens or malformed expressions will stop the roll.\n"
+                "• Valid examples:\n"
+                "  - `Dexterity+Athletics`\n"
+                "  - `Strength+Melee[Swords]-2`\n"
+                "  - `Celerity+Dexterity+1`\n"
+                "• Invalid examples:\n"
+                "  - `+DexterityAthletics`\n"
+                "  - `Dexterity++Athletics`"
+            ),
+            inline=False
+        )
+
+        # --- Dice Result Formatting ---
+        embed.add_field(
+            name="Dice Result Formatting",
+            value=(
+                "• Bold 10s = Criticals (when specialization applies)\n"
+                "• Italic numbers = regular successes\n"
+                "• Strikethrough = successes canceled by botches (1's)\n"
+                "• Dark numbers = failures (below difficulty)\n\n"
+                "Results are shown from lowest to highest."
+            ),
+            inline=False
+        )
+
+        # --- Comment Field ---
+        embed.add_field(
+            name="Comments",
+            value=(
+                "You can optionally add a comment to explain what the roll is for.\n\n"
+                "Example:\n"
+                "`/roll name:Zayd roll_str:Dexterity+Melee difficulty:6 comment:\"Attacking the ghoul\"`"
+            ),
+            inline=False
+        )
+
+        embed.set_footer(text="DarkWorldBot Dice Roller • Use macros to speed up rolls.")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
