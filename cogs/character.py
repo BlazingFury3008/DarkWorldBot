@@ -3,18 +3,18 @@ from discord.ext import commands
 from discord import app_commands, Role
 from libs.character import *
 from libs.macro import *
-import logging
 from bot import config
 import ast
 from datetime import datetime
 
+import logging
 logger = logging.getLogger(__name__)
 
 
 class CharacterCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        print("Registered CharacterCog")
+        logger.info("Diceroller Cog registered")
 
     # ---------------------------
     # Group Definition
@@ -63,9 +63,13 @@ class CharacterCog(commands.Cog):
                 await interaction.followup.send("Character already saved!", ephemeral=True)
                 return
 
-            # Update user nickname with character
             base_username = interaction.user.name
-            new_nick = f"{char.name} || {base_username}"
+            playername = char.player_name
+            
+            if playername.strip() == "Player Name" or playername.strip() == "":
+                new_nick = f"{char.name} || {base_username}"
+            else:
+                new_nick = f"{char.name} || {playername}"
 
             message = ""
             member = interaction.user
@@ -319,7 +323,12 @@ class CharacterCog(commands.Cog):
             char.refetch_data()
 
             base_username = interaction.user.name
-            new_nick = f"{char.name} || {base_username}"
+            playername = char.player_name
+            
+            if playername.strip() == "Player Name" or playername.strip() == "":
+                new_nick = f"{char.name} || {base_username}"
+            else:
+                new_nick = f"{char.name} || {playername}"
 
             member = interaction.user
             if isinstance(member, discord.Member):

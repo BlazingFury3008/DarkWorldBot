@@ -1,18 +1,43 @@
 import discord
-from discord.ext import commands  # Use 'commands' directly instead of importing Bot alone
+from discord.ext import commands
 from dotenv import dotenv_values
 import asyncio
+import logging
 
 from cogs import helper, character, tupper, diceroller
 from libs.database_loader import init_db
 
-# Load configuration from .env
-config = dotenv_values(".env")
+# ---------------------------
+# Logging Configuration
+# ---------------------------
+logging.basicConfig(
+    level=logging.DEBUG,  # use INFO in production to reduce noise
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
+# Quiet down discord.py's internal noise
+logging.getLogger("discord").setLevel(logging.WARNING)
+logging.getLogger("discord.http").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
+logger.info("Logging configured successfully.")
+
+# ---------------------------
+# Load configuration from .env
+# ---------------------------
+config = dotenv_values(".env")
+if "DISCORD_KEY" not in config:
+    logger.error("DISCORD_KEY not found in .env file.")
+    raise SystemExit(1)
+
+# ---------------------------
 # Setup Discord Intents
+# ---------------------------
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
+
 
 # Create the bot instance
 bot = commands.Bot(command_prefix="~", intents=intents)

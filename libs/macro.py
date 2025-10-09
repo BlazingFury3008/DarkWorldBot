@@ -141,21 +141,21 @@ def decompile_macro(macro: str) -> Tuple[str, List[Dict[str, Union[str, int, Dic
 
     return name, output_tokens
 
-def sum_macro(macro_str: str, char: Character) -> Tuple[int, bool]:
+def sum_macro(macro_str: str, char: Character) -> Tuple[int, bool, List[str]]:
     """
     Sum the values in a macro string like:
       Dexterity+Melee[Swords]+Celerity-2
 
     Returns:
-        (total_value: int, used_spec: bool)
+        (total_value: int, used_spec: bool, specs_applied: list[str])
     """
     if not macro_str or not isinstance(macro_str, str):
-        return -1, False
+        return -1, False, []
 
-    # Split on + and - but keep the sign in a separate group
     tokens = re.findall(r"[+-]?\s*[^+-]+", macro_str)
     total = 0
     used_spec = False
+    specs_applied: List[str] = []
 
     for token in tokens:
         token = token.strip()
@@ -178,21 +178,23 @@ def sum_macro(macro_str: str, char: Character) -> Tuple[int, bool]:
         # Trait names with optional spec
         match = re.match(r"([A-Za-z\s]+)(?:\[([^\]]+)\])?", token)
         if not match:
-            return -1, False  # invalid token
+            return -1, False, []  # invalid token
 
         trait_name = match.group(1).strip()
         spec = match.group(2)
 
         value, found, spec_used = get_character_value(char, trait_name, spec)
         if not found:
-            return -1, False
+            return -1, False, []
 
         total += sign * value
+
         if spec_used:
             used_spec = True
+            if spec:  # capture the actual specialization name
+                specs_applied.append(spec)
 
-    return total, used_spec
-
+    return total, used_spec, specs_applied
 
 def get_character_value(char: Character, trait_name: str, spec: str = None) -> Tuple[int, bool, bool]:
     """

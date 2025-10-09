@@ -2,14 +2,16 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
+import logging
+logger = logging.getLogger(__name__)
 class Helper(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        print("Registered Helper")
+        logger.info("Helper Cog registered")
 
     helper = app_commands.Group(name="helper", description="All helper commands")
 
-    @helper.command(name="resync", description="resync commands")
+    @app_commands.command(name="resync", description="resync commands")
     async def resync(self, interaction:discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.bot.tree.sync()
