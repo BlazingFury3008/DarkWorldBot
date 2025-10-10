@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands, Role
 from libs.character import *
 from libs.macro import *
+from libs.role import *
 from bot import config
 import ast
 from datetime import datetime
@@ -348,6 +349,8 @@ class CharacterCog(commands.Cog):
                         "Character resynced, but an error occurred while changing the nickname.",
                         ephemeral=True
                     )
+
+            await assign_roles_for_character(interaction.user, char)
 
             await interaction.followup.send("Resynced successfully!", ephemeral=True)
 

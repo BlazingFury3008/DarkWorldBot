@@ -9,16 +9,15 @@ from dotenv import dotenv_values
 
 import logging
 import ast
-from typing import List
+from typing import List, Tuple
 
 config = dotenv_values(".env")
-
 logger = logging.getLogger(__name__)
 
 class Diceroller(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        print("Registered Diceroller")
+        logger.info("Registered Diceroller")
 
     # ---------------------------
     # Autocomplete Helper
@@ -26,30 +25,200 @@ class Diceroller(commands.Cog):
     async def _character_name_autocomplete(
         self, interaction: discord.Interaction, current: str
     ) -> List[app_commands.Choice[str]]:
-        """Autocomplete character names for the current user"""
         user_id = str(interaction.user.id)
         try:
             names = list_characters_for_user(user_id) or []
-            # ensure they are strings
-            names = [n for n in names if isinstance(n, str)]
-            logger.debug(f"Autocomplete names for {user_id}: {names}")
         except Exception as e:
             logger.error(f"Autocomplete error: {e}")
             names = []
 
-        current_lower = current.lower()
         return [
             app_commands.Choice(name=n, value=n)
-            for n in names if current_lower in n.lower()
+            for n in names if current.lower() in n.lower()
         ][:25]
 
     # ---------------------------
-    # /roll Command (Top-Level)
+    # Utility: Handle Willpower Token
+    # ---------------------------
+    def _process_willpower(self, roll_str: str, char: Character) -> Tuple[str, bool]:
+        """Remove +WP from roll_str and spend Willpower if available"""
+        if "+WP" not in roll_str.upper():
+            return roll_str, False
+
+        if char.curr_willpower < 1:
+            raise ValueError(f"{char.name} does not have enough Willpower to spend!")
+
+        cleaned = (
+            roll_str.replace("+WP", "")
+                    .replace("+wp", "")
+                    .replace("+Wp", "")
+                    .replace("+wP", "")
+                    .strip()
+        )
+        char.curr_willpower -= 1
+        char.save_parsed()
+        logger.debug(f"[ROLL] Willpower spent for {char.name}. Remaining: {char.curr_willpower}")
+        return cleaned, True
+
+    # ---------------------------
+    # Utility: Resolve Dice Pool
+    # ---------------------------
+    def _resolve_dice_pool(self, roll_str: str, char: Character) -> Tuple[int, bool, List[str]]:
+        """Determine dice pool from either macro or expression"""
+        macro_str = get_character_macro(char.uuid)
+        if macro_str:
+            for macro in macro_str.split(";"):
+                if "=" not in macro:
+                    continue
+                name_part, expr = macro.split("=", 1)
+                if roll_str.strip() == name_part.strip():
+                    return sum_macro(expr, char=char)
+
+        return sum_macro(roll_str, char=char)
+
+    # ---------------------------
+    # Utility: Format String
+    # ---------------------------
+    def format_roll_expression(self, expr: str) -> str:
+        """
+        Convert a raw roll expression into a more human-readable string.
+        Example:
+            Dexterity+Melee[Swords]+4   → "Rolling Dexterity, Melee (Swords) + 4 dice"
+            Strength-2                 → "Rolling Strength - 2 dice"
+        """
+        if not expr or not isinstance(expr, str):
+            return "Rolling (invalid expression)"
+
+        # Split tokens by + or - but keep the sign
+        tokens = re.findall(r"[+-]?\s*[^+-]+", expr)
+        trait_parts = []
+        dice_mods = []
+
+        for token in tokens:
+            token = token.strip()
+            if not token:
+                continue
+
+            # Extract sign
+            sign = "+"
+            if token[0] in "+-":
+                sign = token[0]
+                token = token[1:].strip()
+
+            # Numbers → dice modifiers
+            if re.fullmatch(r"\d+", token):
+                mod = f"{sign} {token} dice"
+                dice_mods.append(mod)
+                continue
+
+            # Traits with optional spec
+            m = re.match(r"([A-Za-z\s]+)(?:\[([^\]]+)\])?", token)
+            if m:
+                name = m.group(1).strip()
+                spec = m.group(2)
+                if spec:
+                    trait_parts.append(f"{name} ({spec})")
+                else:
+                    trait_parts.append(name)
+                continue
+
+        # Join traits with commas, then add dice mods after
+        trait_str = ", ".join(trait_parts) if trait_parts else ""
+        mods_str = " ".join(dice_mods)
+
+        if trait_str and mods_str:
+            return f"Rolling {trait_str} {mods_str}"
+        elif trait_str:
+            return f"Rolling {trait_str}"
+        elif mods_str:
+            return f"Rolling {mods_str}"
+        else:
+            return "Rolling (empty expression)"
+
+    # ---------------------------
+    # Utility: Build Result Embed
+    # ---------------------------
+    def _build_roll_embed(
+        self,
+        interaction: discord.Interaction,
+        total_pool: int,
+        difficulty: int,
+        successes: int,
+        botch: bool,
+        formatted: List[str],
+        specs_applied: List[str],
+        original_str: str,
+        comment: str,
+        willpower_used: bool
+    ) -> discord.Embed:
+        """Create the nicely formatted roll result embed"""
+        color = discord.Color.dark_red() if successes == 0 else discord.Color.green()
+        embed = discord.Embed(
+            title=f"{interaction.user.display_name or interaction.user.name}: Pool {total_pool}, Diff {difficulty}",
+            color=color
+        )
+
+        result_title = f"{successes} Success{'es' if successes != 1 else ''}" if not botch else "BOTCH"
+        embed.add_field(name=result_title, value=" ", inline=False)
+
+        embed.add_field(name="Dice", value=" ".join(formatted), inline=True)
+        embed.add_field(
+            name="Specialties Applied",
+            value=", ".join(specs_applied) if specs_applied else "None",
+            inline=True
+        )
+
+        footer_string = self.format_roll_expression(original_str)
+
+
+        footer_value = f"-# {footer_string.strip()}"
+        if willpower_used:
+            footer_value += "; Willpower Used"
+        if comment:
+            footer_value += f"\n\n-# {comment}"
+        embed.add_field(name="", value=footer_value, inline=False)
+
+        return embed
+
+
+
+
+    # ---------------------------
+    # Utility: Botch Role Mention
+    # ---------------------------
+    async def _handle_botch_mention(self, interaction: discord.Interaction, char_name: str):
+        """Mention storyteller roles on botch if configured"""
+        try:
+            roles_env = config.get("ROLES", "[]")
+            try:
+                role_names = ast.literal_eval(roles_env)
+            except Exception:
+                logger.warning("[ROLL] ROLES env variable invalid. Using empty list.")
+                role_names = []
+
+            if not role_names:
+                return
+
+            guild_roles = interaction.guild.roles
+            mentionable_roles = [
+                next((r for r in guild_roles if r.name.lower() == role_name.lower()), None)
+                for role_name in role_names
+            ]
+            mentionable_roles = [r for r in mentionable_roles if r is not None]
+
+            if mentionable_roles:
+                mentions = " ".join([r.mention for r in mentionable_roles])
+                await interaction.channel.send(f"BOTCH by {char_name} — {mentions}")
+        except Exception as e:
+            logger.exception(f"[ROLL] Error during botch mention: {e}")
+
+    # ---------------------------
+    # /roll Command
     # ---------------------------
     @app_commands.command(name="roll", description="Roll dice using a macro or expression")
     @app_commands.describe(
         name="Character name",
-        roll_str="Macro name or expression (e.g. Dexterity+Melee)",
+        roll_str="Macro name or expression (e.g. Dexterity+Melee or Attack+WP)",
         difficulty="Difficulty of the roll",
         comment="Optional comment to display with the roll"
     )
@@ -62,257 +231,65 @@ class Diceroller(commands.Cog):
         comment: str = None
     ):
         await interaction.response.defer(ephemeral=True)
+
         try:
-            logger.info(f"[ROLL] User '{interaction.user}' rolling for character '{name}' with expr='{roll_str}' (Diff {difficulty})")
-
-            total_pool = -1
-            spec_used = False
-            specs_applied = []
-
             # Load character
             user_id = str(interaction.user.id)
             char = Character.load_by_name(name, user_id)
             if not char:
-                logger.warning(f"[ROLL] Character '{name}' not found for user {user_id}")
-                await interaction.followup.send(
-                    f"No character named {name} found.", ephemeral=True
-                )
+                await interaction.followup.send(f"No character named {name} found.", ephemeral=True)
                 return
 
-            # --- Macro Check ---
-            macro_str = get_character_macro(char.uuid)
-            if macro_str:
-                logger.debug(f"[ROLL] Found macros for {char.name}: {macro_str}")
-                macros = macro_str.split(";")
-                for macro in macros:
-                    if "=" not in macro:
-                        continue
-                    name_part, expr = macro.split("=", 1)
-                    if roll_str == name_part:
-                        total_pool, spec_used, specs_applied = sum_macro(expr, char=char)
-                        logger.debug(f"[ROLL] Using macro '{name_part}' → pool={total_pool}, specs={specs_applied}")
-                        break
+            # Willpower
+            roll_str, willpower_used = self._process_willpower(roll_str, char)
 
-            # --- Expression Check ---
+            # Dice pool
+            total_pool, spec_used, specs_applied = self._resolve_dice_pool(roll_str, char)
             if total_pool == -1:
-                total_pool, spec_used, specs_applied = sum_macro(roll_str, char=char)
-                logger.debug(f"[ROLL] Using expression '{roll_str}' → pool={total_pool}, specs={specs_applied}")
-
-            if total_pool == -1:
-                logger.error(f"[ROLL] Unable to resolve pool for '{roll_str}'")
                 await interaction.followup.send(
                     "Unable to roll this pool. Check your syntax and try again.",
                     ephemeral=True,
                 )
                 return
 
-            # --- Roll Dice ---
-            formatted, successes, botch = roll_dice(total_pool, spec_used, difficulty)
-            logger.info(
-                f"[ROLL] Dice rolled → pool={total_pool}, successes={successes}, botch={botch}, formatted={formatted}"
+            # Dice roll
+            formatted, successes, botch, ones_count = roll_dice(
+                total_pool, spec_used, difficulty, return_ones=True
             )
 
-            embed = discord.Embed(
-                title=f"{interaction.user.display_name or interaction.user.name}: Pool {total_pool}, Diff {difficulty}",
-                color=(discord.Color.dark_red() if successes == 0 else discord.Color.green())
+            # Apply Willpower auto-success
+            if willpower_used:
+                if ones_count > 0:
+                    ones_count -= 1
+                    logger.debug("[ROLL] Willpower success canceled by a '1'")
+                else:
+                    successes += 1
+                    formatted.append("*WP*")
+
+            # Build Embed
+            embed = self._build_roll_embed(
+                interaction, total_pool, difficulty, successes, botch,
+                formatted, specs_applied, roll_str, comment, willpower_used
             )
 
-            # Result summary
-            embed.add_field(
-                name=(f"{successes} Success{'es' if successes != 1 else ''}" if not botch else "BOTCH"),
-                value=" ",
-                inline=False
-            )
-
-            # Dice results
-            embed.add_field(name="Dice", value=" ".join(formatted), inline=True)
-
-            # Specialties used
-            if specs_applied:
-                embed.add_field(
-                    name="Specialties Applied",
-                    value=", ".join(specs_applied),
-                    inline=True
-                )
-            else:
-                embed.add_field(
-                    name="Specialties Applied",
-                    value="None",
-                    inline=True
-                )
-
-            # Original roll string + optional comment
-            footer_value = f"-# {roll_str}"
-            if comment:
-                footer_value += f"\n\n-# {comment}"
-
-            embed.add_field(name="", value=footer_value, inline=False)
-
-            # Delete ephemeral response
+            # Replace ephemeral with public message
             try:
                 await interaction.delete_original_response()
-            except Exception as e:
-                logger.debug(f"[ROLL] Could not delete original response: {e}")
+            except Exception:
+                pass
 
-            # Send public result
             await interaction.channel.send(embed=embed)
 
-            # --- Botch Role Mention ---
+            # Botch role ping
             if botch:
-                logger.info(f"[ROLL] Botch detected for {char.name}. Attempting role mention...")
-                try:
-                    roles_env = config.get("ROLES", "[]")
-                    logger.debug(f"[ROLL] Raw ROLES env: {roles_env}")
+                await self._handle_botch_mention(interaction, char.name)
 
-                    try:
-                        role_names = ast.literal_eval(roles_env)
-                        logger.debug(f"[ROLL] Parsed role names (ast): {role_names}")
-                    except Exception:
-                        logger.warning("[ROLL] ROLES env variable invalid. Using empty list.")
-                        role_names = []
-
-                    if role_names:
-                        guild_roles = interaction.guild.roles
-                        logger.debug(f"[ROLL] Guild roles: {[r.name for r in guild_roles]}")
-
-                        mentionable_roles = [
-                            next((r for r in guild_roles if r.name.lower() == role_name.lower()), None)
-                            for role_name in role_names
-                        ]
-                        mentionable_roles = [r for r in mentionable_roles if r is not None]
-
-                        if mentionable_roles:
-                            mentions = " ".join([r.mention for r in mentionable_roles])
-                            await interaction.channel.send(f"BOTCH by {char.name} — {mentions}")
-                            logger.info(f"[ROLL] Sent botch ping: {mentions}")
-                        else:
-                            logger.warning(f"[ROLL] No matching roles found for: {role_names}")
-                    else:
-                        logger.debug("[ROLL] No roles set for botch mention.")
-
-                except Exception as botch_err:
-                    logger.exception(f"[ROLL] Error during botch mention: {botch_err}")
-
+        except ValueError as ve:
+            await interaction.followup.send(str(ve), ephemeral=True)
         except Exception as e:
             logger.exception(f"[ROLL] Roll command error: {e}")
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
-
     @roll.autocomplete("name")
     async def roll_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
-
-    @app_commands.command(name="roll-help", description="Show help for the dice roller syntax")
-    async def roll_help(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="Dice Roller Help",
-            description="How to use expressions and macros with the `/roll` command.",
-            color=discord.Color.blurple()
-        )
-
-        # --- Basic Usage ---
-        embed.add_field(
-            name="Basic Syntax",
-            value=(
-                "You can roll dice using either:\n"
-                "• A **macro name** you’ve saved for your character.\n"
-                "• A **direct expression**, e.g. `Dexterity+Melee[Swords]-2`.\n\n"
-                "Format:\n"
-                "`TRAIT[Specialization]+TRAIT-Number+...`\n"
-                "You can mix traits, numbers, and specializations freely."
-            ),
-            inline=False
-        )
-
-        # --- Trait & Spec ---
-        embed.add_field(
-            name="Traits and Specializations",
-            value=(
-                "- Traits can be: attributes, abilities, disciplines, backgrounds, virtues, or magic paths.\n"
-                "- You can also use:\n"
-                "  • `Willpower` → current Willpower\n"
-                "  • `Willmax` → maximum Willpower\n\n"
-                "- Add a specialization in square brackets to apply it, for example:\n"
-                "`Melee[Swords]` will apply your Melee dots if you have `Swords` as a specialization."
-            ),
-            inline=False
-        )
-
-        # --- Examples ---
-        embed.add_field(
-            name="Examples",
-            value=(
-                "`/roll name:Zayd roll_str:Dexterity+Melee[Swords] difficulty:6`\n"
-                "→ Rolls Dexterity + Melee (with Swords spec if available) vs difficulty 6\n\n"
-                "`/roll name:Zayd roll_str:Strength+2 difficulty:7`\n"
-                "→ Rolls Strength + 2 bonus dice vs difficulty 7\n\n"
-                "`/roll name:Zayd roll_str:Attack difficulty:6`\n"
-                "→ Uses the character's saved macro named Attack"
-            ),
-            inline=False
-        )
-
-        # --- Macro Definition ---
-        embed.add_field(
-            name="Macros",
-            value=(
-                "You can define macros to avoid retyping common rolls.\n\n"
-                "Format:\n"
-                "`MacroName=Expression`\n\n"
-                "Example:\n"
-                "`Attack=Dexterity+Melee[Swords]+2`\n"
-                "Then use it with:\n"
-                "`/roll name:Zayd roll_str:Attack difficulty:6`\n\n"
-                "Macros will be managed using `/macro` commands:\n"
-                "- `/macro new name:Attack roll_str:Dexterity+Melee[Swords]+2`\n"
-                "- `/macro edit name:Attack roll_str:Strength+Melee`\n"
-                "- `/macro delete name:Attack`\n\n"
-                "Each character has their own set of macros."
-            ),
-            inline=False
-        )
-
-        # --- Expression Rules ---
-        embed.add_field(
-            name="Expression Rules",
-            value=(
-                "• Expressions must alternate between **trait/number** and **+/-** operators.\n"
-                "• Invalid tokens or malformed expressions will stop the roll.\n"
-                "• Valid examples:\n"
-                "  - `Dexterity+Athletics`\n"
-                "  - `Strength+Melee[Swords]-2`\n"
-                "  - `Celerity+Dexterity+1`\n"
-                "• Invalid examples:\n"
-                "  - `+DexterityAthletics`\n"
-                "  - `Dexterity++Athletics`"
-            ),
-            inline=False
-        )
-
-        # --- Dice Result Formatting ---
-        embed.add_field(
-            name="Dice Result Formatting",
-            value=(
-                "• Bold 10s = Criticals (when specialization applies)\n"
-                "• Italic numbers = regular successes\n"
-                "• Strikethrough = successes canceled by botches (1's)\n"
-                "• Dark numbers = failures (below difficulty)\n\n"
-                "Results are shown from lowest to highest."
-            ),
-            inline=False
-        )
-
-        # --- Comment Field ---
-        embed.add_field(
-            name="Comments",
-            value=(
-                "You can optionally add a comment to explain what the roll is for.\n\n"
-                "Example:\n"
-                "`/roll name:Zayd roll_str:Dexterity+Melee difficulty:6 comment:\"Attacking the ghoul\"`"
-            ),
-            inline=False
-        )
-
-        embed.set_footer(text="DarkWorldBot Dice Roller • Use macros to speed up rolls.")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)

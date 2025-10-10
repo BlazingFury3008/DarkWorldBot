@@ -1,6 +1,6 @@
 from random import randint
 
-def roll_dice(pool: int, spec: bool, difficulty: int):
+def roll_dice(pool: int, spec: bool, difficulty: int, return_ones: bool = False):
     """
     V20 dice roller with proper formatting and sorted results.
     - ~~strike~~: 1's and cancelled successes
@@ -11,25 +11,27 @@ def roll_dice(pool: int, spec: bool, difficulty: int):
     """
     rolls = [randint(1, 10) for _ in range(pool)]
     indexed_rolls = list(enumerate(rolls))
-    indexed_rolls.sort(key=lambda x: x[1])  # sort by roll value ascending
+    indexed_rolls.sort(key=lambda x: x[1])  # sort ascending by value
 
     successes_idx = []
     total_successes = 0
 
-    # Count successes (10 with spec counts as 2)
+    # Count successes
     for i, val in indexed_rolls:
         if val == 1:
             continue
         if val == 10 and spec:
             total_successes += 2
-            successes_idx.append(i)
+            successes_idx.append((i, val))
         elif val >= difficulty:
             total_successes += 1
-            successes_idx.append(i)
+            successes_idx.append((i, val))
 
-    # Cancel successes with 1's
+    # Cancel lowest successes with 1's
     ones_idx = [i for i, v in indexed_rolls if v == 1]
-    to_cancel = successes_idx[:len(ones_idx)]
+    successes_idx.sort(key=lambda x: x[1])  # cancel lowest successes first
+    to_cancel = [idx for idx, _ in successes_idx[:len(ones_idx)]]
+
     final_suxx = max(0, total_successes - len(ones_idx))
     botch = total_successes == 0 and len(ones_idx) > 0
 
@@ -50,11 +52,12 @@ def roll_dice(pool: int, spec: bool, difficulty: int):
 
     formatted = struck + italic
 
-        # Only add a separator if both sides have content
+    # Add separator between failed/canceled vs successes if both exist
     if formatted and (normal or crit):
         formatted.append("|")
 
     formatted += normal + crit
 
-
+    if return_ones:
+        return formatted, final_suxx, botch, len(ones_idx)
     return formatted, final_suxx, botch
