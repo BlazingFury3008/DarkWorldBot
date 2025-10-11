@@ -8,14 +8,16 @@ logger = logging.getLogger(__name__)
 async def assign_roles_for_character(member: discord.Member, char: Character):
     """
     Assign clan, sect, and ranking roles to a Discord member based on their character.
-    This is a template with basic match-case switches for you to fill in.
+    Clears only previously relevant roles (sect, ranking, clan), then reapplies.
     """
     guild = member.guild
     if not guild:
         logger.warning(f"[ROLES] No guild found for {member}")
         return
 
+    # -------------------------------------
     # Helper to find a role by name (case-insensitive)
+    # -------------------------------------
     def find_role(name: str):
         if not name:
             return None
@@ -25,8 +27,9 @@ async def assign_roles_for_character(member: discord.Member, char: Character):
         return next((r for r in guild.roles if r.name.lower() == name.lower()), None)
 
     # =========================
-    # RANKING SWITCH
+    # RESOLVE ROLES TO ASSIGN
     # =========================
+    # Ranking
     ranking_role = None
     match (char.ranking or "").strip():
         case "Mortal":
@@ -44,11 +47,9 @@ async def assign_roles_for_character(member: discord.Member, char: Character):
         case "Elder":
             ranking_role = find_role("Elder")
         case _:
-            ranking_role = None  # Unknown or unset
+            ranking_role = None
 
-    # =========================
-    # CLAN SWITCH
-    # =========================
+    # Clan
     clan_role = None
     match (char.clan or "").strip():
         case "Banu Haqim" | "Banu Haqim Antitribu" | "Banu Haqim Sorcerers" | "Banu Haqim Viziers" | "Banu Haqim Vassal":
@@ -126,10 +127,7 @@ async def assign_roles_for_character(member: discord.Member, char: Character):
         case _:
             clan_role = find_role(char.clan)
 
-
-    # =========================
-    # SECT SWITCH
-    # =========================
+    # Sect
     sect_role = None
     match (char.sect or "").strip():
         case "Camarilla":
@@ -138,18 +136,32 @@ async def assign_roles_for_character(member: discord.Member, char: Character):
             sect_role = find_role("Sabbat")
         case "Anarch":
             sect_role = find_role("Anarch")
-        # TODO: Add any other sects here
         case _:
             sect_role = None
 
     # =========================
-    # APPLY ROLES
+    # REMOVE OLD RELEVANT ROLES
     # =========================
-    roles_to_add = [r for r in [ranking_role, clan_role, sect_role] if r]
-    if roles_to_add:
+    resolved_roles = {r for r in [ranking_role, clan_role, sect_role] if r}
+
+    # Build a set of all possible relevant roles that might currently be assigned
+    current_relevant_roles = [r for r in member.roles if r in resolved_roles or r.name in [rr.name for rr in resolved_roles]]
+    if current_relevant_roles:
         try:
-            await member.add_roles(*roles_to_add, reason="Character role assignment")
-            logger.info(f"[ROLES] Assigned {[r.name for r in roles_to_add]} to {member}")
+            await member.remove_roles(*current_relevant_roles, reason="Updating character roles")
+            logger.info(f"[ROLES] Removed old roles {[r.name for r in current_relevant_roles]} from {member}")
+        except discord.Forbidden:
+            logger.warning(f"[ROLES] Missing permissions to remove roles for {member}")
+        except discord.HTTPException as e:
+            logger.error(f"[ROLES] Failed to remove roles for {member}: {e}")
+
+    # =========================
+    # APPLY NEW ROLES
+    # =========================
+    if resolved_roles:
+        try:
+            await member.add_roles(*resolved_roles, reason="Character role assignment")
+            logger.info(f"[ROLES] Assigned {[r.name for r in resolved_roles]} to {member}")
         except discord.Forbidden:
             logger.warning(f"[ROLES] Missing permissions to update roles for {member}")
         except discord.HTTPException as e:

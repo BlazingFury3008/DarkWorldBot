@@ -5,6 +5,9 @@ from libs.character import *
 from libs.macro import *
 from libs.role import *
 from bot import config
+from libs.sheet_loader import *
+import aiohttp
+
 import ast
 from datetime import datetime
 
@@ -43,6 +46,33 @@ class CharacterCog(commands.Cog):
             for n in names if current.lower() in n.lower()
         ][:25]
 
+
+    async def _sheet_allows_link_edit(self, url: str) -> bool:
+        """
+        Attempts to write 'ST Verification' into A1 of the sheet to verify
+        that 'Anyone with the link can edit' is enabled.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            client = get_client()
+
+            # Open by URL
+            spreadsheet = client.open_by_url(url)
+            worksheet = spreadsheet.get_worksheet(0)  # first worksheet
+
+            # Attempt to write to A1
+            worksheet.update_acell("A1", "ST Verification")
+            logger.debug(f"[SHEET CHECK] Successfully wrote to A1 for {url}")
+            return True
+
+        except gspread.exceptions.APIError as e:
+            # Typically raised if the sheet is not editable by the service account
+            logger.debug(f"[SHEET CHECK] APIError: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"[SHEET CHECK] Unexpected error: {e}")
+            return False
+
     # ---------------------------
     # Init Character
     # ---------------------------
@@ -51,10 +81,19 @@ class CharacterCog(commands.Cog):
         """Initialise a character into the database"""
         await interaction.response.defer(ephemeral=True)
         try:
+            if not await self._sheet_allows_link_edit(url):
+                await interaction.followup.send(
+                    "The provided Google Sheet is not shared with 'Anyone with the link can edit'. "
+                    "Please open the sheet, click Share, select 'Anyone with the link', and set it to Editor. "
+                    "Then try again.",
+                    ephemeral=True
+                 )       
+                return     
             user_id = str(interaction.user.id)
             char = Character(user_id=user_id, SHEET_URL=url)
             char.reset_temp()
             logger.info("Character Fetched")
+        
 
             # Generate a keyword (used for Tupper functionality later)
             keyword = (char.name or char.uuid).lower().replace(" ", "")
@@ -399,38 +438,6 @@ class CharacterCog(commands.Cog):
     @keyword.autocomplete("name")
     async def keyword_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
-
-    # ---------------------------
-    # Weekly Reset (ST Only)
-    # ---------------------------
-    @character.command(name="reset", description="Weekly reset of characters")
-    async def reset_all(self, interaction: discord.Interaction):
-        """Reset all characters (requires ST role)"""
-        await interaction.response.defer(ephemeral=True)
-
-        raw_roles = config.get("ROLES", "[]")
-        try:
-            allowed_roles = ast.literal_eval(raw_roles)  # safely parse into a list
-        except Exception:
-            allowed_roles = [r.strip() for r in raw_roles.split(",")]
-        user_roles = [r.name for r in getattr(interaction.user, "roles", [])]
-
-        # Role check
-        match_found = any(r in user_roles for r in allowed_roles)
-        if not match_found:
-            await interaction.followup.send("You do not have the correct role!", ephemeral=True)
-            return
-
-        chars = get_all_characters()
-        try:
-            for char in chars:
-                c = Character(str_uuid=char["uuid"], user_id=char["user_id"], use_cache=True)
-                c.refetch_data()
-                c.reset_willpower()
-                c.save_parsed()
-            await interaction.followup.send("Done!")
-        except Exception as e:
-            await interaction.followup.send(f"Error occurred {e}")
 
     # ---------------------------
     # Adjust Blood

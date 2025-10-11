@@ -6,12 +6,13 @@ from libs.character import *
 from libs.macro import *
 from libs.roller import *
 from dotenv import dotenv_values
+config = dotenv_values(".env")
 
 import logging
 import ast
 from typing import List, Tuple
 
-config = dotenv_values(".env")
+
 logger = logging.getLogger(__name__)
 
 class Diceroller(commands.Cog):

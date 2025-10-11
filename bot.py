@@ -2,27 +2,35 @@ import discord
 from discord.ext import commands
 from dotenv import dotenv_values
 import asyncio
-import logging
 
-from cogs import helper, character, tupper, diceroller
+from cogs import helper, character, tupper, diceroller, st_commands
 from libs.database_loader import init_db
 
 # ---------------------------
 # Logging Configuration
 # ---------------------------
+import logging
+import sys
+
+# Configure root logger
 logging.basicConfig(
-    level=logging.DEBUG,  # use INFO in production to reduce noise
+    level=logging.INFO,  # Use INFO in production to reduce debug noise
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # Ensure logs go to stdout for Docker/Heroku
+    ],
 )
 
-# Quiet down discord.py's internal noise
-logging.getLogger("discord").setLevel(logging.WARNING)
-logging.getLogger("discord.http").setLevel(logging.WARNING)
+# Reduce noise from discord internals
+#logging.getLogger("discord").setLevel(logging.WARNING)
+#logging.getLogger("discord.http").setLevel(logging.WARNING)
+#logging.getLogger("asyncio").setLevel(logging.WARNING)
+#logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-logger = logging.getLogger(__name__)
+# App-level logger
+logger = logging.getLogger("bot")
 logger.info("Logging configured successfully.")
-
 # ---------------------------
 # Load configuration from .env
 # ---------------------------
@@ -56,6 +64,8 @@ async def register_bot():
     #await bot.add_cog(scenetracker.SceneTracker(bot))
     await bot.add_cog(helper.Helper(bot))
     await bot.add_cog(character.CharacterCog(bot))
+    await bot.add_cog(st_commands.ST(bot))
+
     #await bot.add_cog(tupper.Tupper(bot))
 
 # Entrypoint
