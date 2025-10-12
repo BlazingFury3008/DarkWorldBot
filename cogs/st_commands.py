@@ -58,22 +58,56 @@ class ST(commands.Cog):
     @requires_st_role()
     async def reset_all(self, interaction: discord.Interaction):
         """Reset all characters (requires ST role)"""
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
+        output_data = []
 
-        chars = get_all_characters()
         try:
+            chars = get_all_characters()
+            weekly_dta = int(config.get("WEEKLY_DTA", 0))
+
             for char in chars:
                 c = Character(str_uuid=char["uuid"], user_id=char["user_id"], use_cache=True)
 
-                weekly_dta = int(config.get("WEEKLY_DTA", 0))
-                c.Total_DTA = (c.Total_DTA or 0) + weekly_dta
-                c.Curr_DTA = (c.Curr_DTA or 0) + weekly_dta
+                # Apply weekly DTA and reset willpower
+                c.total_dta = (c.total_dta or 0) + weekly_dta
+                c.curr_dta = (c.curr_dta or 0) + weekly_dta
+
+                entry = {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "delta": f"+{weekly_dta}",
+                    "reasoning": "Weekly DTA Gain",
+                    "result": c.curr_dta,
+                    "user": str(interaction.user.id),
+                }
+
+                c.dta_log.append(entry)
                 c.refetch_data()
                 c.reset_willpower()
+
+                # ✅ Run blocking Google Sheets write in a thread
+                await asyncio.to_thread(c.write_dta_log, interaction)
+
                 c.save_parsed()
-            await interaction.followup.send("Done!")
+
+                # Build line with character name and mention
+                user_mention = f"<@{c.user_id}>"
+                output_data.append(f"- **{c.name}** ({user_mention})")
+
+            # Build announcement message
+            char_list_text = "\n".join(output_data) if output_data else "No characters found."
+            message = (
+                "## Announcement\n"
+                f"The weekly reset of characters has been completed.\n"
+                f"The following characters have gained **{weekly_dta} weekly DTA**:\n\n"
+                f"{char_list_text}"
+            )
+
+            await interaction.followup.send(message)
+
         except Exception as e:
-            await interaction.followup.send(f"Error occurred {e}")
+            logger.exception(f"[RESET] Error during weekly reset: {e}")
+            await interaction.followup.send(f"Error occurred: {e}", ephemeral=True)
+
 
     # ---------------------------
     # Update Sheets (ST Only)
@@ -138,7 +172,7 @@ class ST(commands.Cog):
                     logger.error(f"[SHEETS] Failed to update {char.name}: {e}")
 
             await interaction.followup.send(
-                f"✅ Synced base sheet to {updated_count} character sheets (excluding: {', '.join(EXCLUDED_TABS)}).",
+                f" Synced base sheet to {updated_count} character sheets (excluding: {', '.join(EXCLUDED_TABS)}).",
                 ephemeral=True
             )
 

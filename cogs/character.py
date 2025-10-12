@@ -4,6 +4,7 @@ from discord import app_commands, Role
 from libs.character import *
 from libs.macro import *
 from libs.role import *
+from libs.roller import process_willpower, resolve_dice_pool, roll_dice, build_roll_embed, handle_botch_mention
 from bot import config
 from libs.sheet_loader import *
 import aiohttp
@@ -111,19 +112,28 @@ class CharacterCog(commands.Cog):
             else:
                 new_nick = f"{char.name} || {playername}"
 
+            entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "delta": char.max_blood,
+            "comment": "Starting Blood",
+            "before": 0,
+            "result": char.max_blood,
+            "user": str(interaction.user.id),
+            }
+            char.curr_blood = char.max_blood
+            char.blood_log.append(entry)
+            char.save_parsed()
+
             message = ""
             member = interaction.user
             if isinstance(member, discord.Member):
                 try:
+                    await assign_roles_for_character(interaction.user, char)
                     await member.edit(nick=new_nick)
                 except discord.Forbidden:
                     message = "Character saved, but I don't have permission to change your nickname."
 
-            await interaction.followup.send(
-                f"Saved and set nickname to **{new_nick}**\n"
-                f"Keyword for Tuppers: **{keyword}** \n {message}",
-                ephemeral=True,
-            )
+            await interaction.followup.send(f"Saved and set nickname to **{new_nick}**\n", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(
                 f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
@@ -463,16 +473,17 @@ class CharacterCog(commands.Cog):
         # Apply adjustment
         new_blood = max(0, min(char.max_blood, char.curr_blood + amount))
         delta = new_blood - char.curr_blood
-        char.curr_blood = new_blood
 
         # Log entry
         entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "delta": delta,
             "comment": comment,
-            "result": char.curr_blood,
+            "before": char.curr_blood,
+            "result": new_blood,
             "user": str(interaction.user.id),
         }
+        char.curr_blood = new_blood
         char.blood_log.append(entry)
         char.save_parsed()
 
@@ -496,42 +507,202 @@ class CharacterCog(commands.Cog):
     async def adjust_blood_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._character_name_autocomplete(interaction, current)
     
+    # ---------------------------
+    # Hunt
+    # ---------------------------
+        
+    @character.command(name="hunt", description="Go Hunting")
+    @app_commands.describe(
+        name="Character name",
+        hunt_str="Rolestring for hunting",
+        difficulty="Difficulty of the hunting roll",
+        comment="Any information needed for/about the hunt"
+    )
+    async def hunt(self, interaction: discord.Interaction, name: str, hunt_str: str, difficulty: int, comment: str = ""):
+        await interaction.response.defer(ephemeral=True)
 
+        try:
+            roll_str = hunt_str
+            # Load character
+            user_id = str(interaction.user.id)
+            char = Character.load_by_name(name, user_id)
+            if not char:
+                await interaction.followup.send(f"No character named {name} found.", ephemeral=True)
+                return
+
+            # Willpower
+            roll_str, willpower_used = process_willpower(roll_str, char)
+
+            # Dice pool
+            total_pool, spec_used, specs_applied = resolve_dice_pool(roll_str, char)
+            if total_pool == -1:
+                await interaction.followup.send(
+                    "Unable to roll this pool. Check your syntax and try again.",
+                    ephemeral=True,
+                )
+                return
+
+            # Dice roll
+            formatted, successes, botch, ones_count = roll_dice(
+                total_pool, spec_used, difficulty, return_ones=True
+            )
+
+            # Apply Willpower auto-success
+            if willpower_used:
+                if ones_count > 0:
+                    ones_count -= 1
+                    logger.debug("[HUNT] Willpower success canceled by a '1'")
+                else:
+                    successes += 1
+                    formatted.append("*WP*")
+
+            # Apply Efficient Digestion if present
+            if hasattr(char, "merits") and "Efficient Digestion" in char.merits and successes > 0:
+                successes = int(successes * 1.5)
+                formatted.append("(×1.5 Efficient Digestion)")
+
+            # Apply blood gain and log it
+            if not hasattr(char, "curr_blood") or char.curr_blood is None:
+                char.curr_blood = char.max_blood
+            if not hasattr(char, "blood_log") or char.blood_log is None:
+                char.blood_log = []
+
+            before_blood = char.curr_blood
+            char.curr_blood = min(char.max_blood, char.curr_blood + successes)
+            gained_blood = char.curr_blood - before_blood
+
+            # Log entry
+            entry = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "delta": gained_blood,
+                "comment": comment or "Hunting",
+                "before": before_blood,
+                "result": char.curr_blood,
+                "user": user_id,
+            }
+            char.blood_log.append(entry)
+            char.save_parsed()
+
+            # Build Embed
+            embed = build_roll_embed(
+                interaction, total_pool, difficulty, successes, botch,
+                formatted, specs_applied, roll_str, comment, willpower_used
+            )
+
+            embed.add_field(
+                name="Hunting Result",
+                value=f"**Blood Gained:** {gained_blood}\n**New Pool:** {char.curr_blood}/{char.max_blood}",
+                inline=False
+            )
+            
+           # Botch role ping
+            if botch:
+                await handle_botch_mention(interaction, char.name)
+
+            # Replace ephemeral with public message
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+
+            await interaction.channel.send(embed=embed)
+
+            # NO hunger ping
+
+        except ValueError as ve:
+            await interaction.followup.send(str(ve), ephemeral=True)
+        except Exception as e:
+            logger.exception(f"[HUNT] Roll command error: {e}")
+            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+
+
+    @hunt.autocomplete("name")
+    async def adjust_blood_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self._character_name_autocomplete(interaction, current)
     # --------------------------
     # Show Blood Logs
     # --------------------------
     @character.command(name="blood-log", description="Show character blood-log")
     @app_commands.describe(uuid="Character to display")
     async def blood_log(self, interaction: discord.Interaction, uuid: str):
-        await interaction.response.defer(ephemeral=False)
+        await interaction.response.defer()
+        name = ""
+        user_id = ""
+        try:
+            d = get_character_by_uuid(uuid)
+            name = d['name']
+            user_id = d['user_id']
+            char = Character.load_by_name(name, user_id)
+            if not char:
+                await interaction.followup.send(f"No character named `{name}` found.")
+                return
 
-        char = get_character_by_uuid(uuid)
-        if not char:
-            await interaction.followup.send("Character not found.", ephemeral=True)
-            return
+            if not hasattr(char, "blood_log"):
+                char.blood_log = []
+                char.save_parsed()
 
-        logs = char.get("blood_log", [])
-        if not logs:
-            await interaction.followup.send(
-                f"No blood logs for {char.get('name','Unknown')}.", ephemeral=True
+            embed = discord.Embed(
+                title=f"Blood Log — {char.name}",
+                description=f"**Current Blood:** {char.curr_blood}\n**Total Blood:** {char.max_blood}",
+                color=discord.Color.blurple()
             )
-            return
+            embed.set_footer(text="Most recent entries last")
 
-        # Header row
-        table_lines = ["```", f"Blood Log — {char.get('name','Unknown')} ({char.get('player_name','?')})", ""]
-        table_lines.append(f"{'Time':<20} {'Δ':>3} {'Result':>6}  Comment")
-        table_lines.append("-" * 60)
+            if not char.blood_log or len(char.blood_log) == 0:
+                embed.add_field(
+                    name="No Entries",
+                    value="This character has no Blood log entries yet.",
+                    inline=False
+                )
+            else:
+                # Sort by timestamp, newest first
+                sorted_log = sorted(
+                    char.blood_log,
+                    key=lambda x: x.get("timestamp", ""),
+                    reverse=False
+                )
 
-        # Show last 15 logs (newest first)
-        for log in logs[-15:][::-1]:
-            ts = log.get("timestamp", "unknown")
-            delta = log.get("delta", 0)
-            result = log.get("result", "?")
-            comment = log.get("comment", "")
-            table_lines.append(f"{ts:<20} {delta:>+3} {result:>6}  {comment}")
+                # Table header
+                header = f"{'Date':<12} | {'Δ':<5} | {'Before':<6} | {'After':<6} | {'Comment':<8}"
+                separator = "-" * len(header)
+                lines = [header, separator]
 
-        table_lines.append("```")
-        await interaction.followup.send("\n".join(table_lines))
+                for entry in sorted_log:
+                    try:
+                        ts = datetime.fromisoformat(entry["timestamp"])
+                        formatted_date = ts.strftime("%d/%m/%Y")
+                    except Exception:
+                        formatted_date = entry.get("timestamp", "")
+
+                    delta = entry.get("delta", "")
+                    comment = entry.get("comment", "")[:40]  # truncate if long
+                    result = str(entry.get("result", ""))
+                    before = str(entry.get("before", ""))
+
+                    line = f"{formatted_date:<12} | {delta:<5} | {before:<6} | {result:<6} | {comment[:8]}"
+                    lines.append(line)
+
+                # Join into code block, chunk if too long
+                table_text = "\n".join(lines)
+                while table_text:
+                    if len(table_text) <= 1024:
+                        embed.add_field(name="Log", value=f"```{table_text}```", inline=False)
+                        break
+                    else:
+                        split_index = table_text.rfind("\n", 0, 1024)
+                        chunk = table_text[:split_index]
+                        embed.add_field(name="Log", value=f"```{chunk}```", inline=False)
+                        table_text = table_text[split_index + 1:]
+
+            await interaction.followup.send(embed=embed)
+
+        except Exception as e:
+            logger.warning(f"[BLOOD LOG] Error loading Blood Log for '{name}' (user {user_id}): {e}")
+            await interaction.followup.send(
+                "An error occurred while retrieving the Blood Log.", ephemeral=True
+        )
+
 
     @blood_log.autocomplete("uuid")
     async def blood_log_autocomplete(self, interaction: discord.Interaction, current: str):

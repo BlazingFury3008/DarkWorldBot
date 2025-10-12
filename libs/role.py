@@ -136,6 +136,8 @@ async def assign_roles_for_character(member: discord.Member, char: Character):
             sect_role = find_role("Sabbat")
         case "Anarch":
             sect_role = find_role("Anarch")
+        case "Autarki":
+            sect_role = find_role("Autarki")
         case _:
             sect_role = None
 

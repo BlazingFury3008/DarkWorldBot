@@ -3,7 +3,7 @@ from discord.ext import commands
 from dotenv import dotenv_values
 import asyncio
 
-from cogs import helper, character, tupper, diceroller, st_commands
+from cogs import helper, character, tupper, diceroller, st_commands, dta
 from libs.database_loader import init_db
 
 # ---------------------------
@@ -65,6 +65,7 @@ async def register_bot():
     await bot.add_cog(helper.Helper(bot))
     await bot.add_cog(character.CharacterCog(bot))
     await bot.add_cog(st_commands.ST(bot))
+    await bot.add_cog(dta.DTA(bot))
 
     #await bot.add_cog(tupper.Tupper(bot))
 

@@ -2,6 +2,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+import discord
 
 import gspread
 import gspread.utils
@@ -51,6 +52,10 @@ class Character:
         self.last_updated = None
         self.curr_blood = 0
         self.curr_willpower = 0
+        self.curr_dta = 0
+        self.total_dta = 0
+        self.dta_log = []
+        self.blood_log = []
 
         cached = load_character_json(self.uuid, self.user_id) if use_cache else None
 
@@ -240,7 +245,8 @@ class Character:
         except IndexError:
             specs = None
 
-        return {"name": name.strip(), "value": value_count, "specs": specs}
+        clean_name = name.split("*", 1)[0].strip() if name else ""
+        return {"name": clean_name, "value": value_count, "specs": specs}    
     
     def get_combo_discipline(self, cell: str) -> str:
         row, col = gspread.utils.a1_to_rowcol(cell)
@@ -402,6 +408,7 @@ class Character:
         # Save parsed dict to DB
         self.save_parsed(update=True)
 
+
     def save_parsed(self, keyword: str = None, update=True):
             data = {
                 k: v for k, v in self.__dict__.items()
@@ -414,6 +421,8 @@ class Character:
 
             save_character_json(self.uuid, self.user_id, data, keyword)
             return 0
+        
+
 
 
     def to_dict(self) -> dict:
@@ -574,4 +583,101 @@ class Character:
         
     def reset_willpower(self):
         self.curr_willpower = self.max_willpower
+        
+    def write_dta_log(self, ctx: discord.Interaction):
+        """
+        Write all entries in self.dta_log to the 'XP & Downtime Logs' worksheet.
 
+        - Clears rows 12–199 (AF:BB) before writing new data.
+        - AF = timestamp (DD-MM-YYYY)
+        - AJ = gained (positive delta, number only)
+        - AM = spent (negative delta, number only)
+        - AP = comment
+        - BB = Discord username (resolved via guild member, fallback to 'N/A')
+        """
+        if not self.dta_log:
+            logger.info("No DTA log entries to write.")
+            return
+
+        # Google Sheets client
+        client = get_client()
+        spreadsheet = client.open_by_url(self.SHEET_URL)
+        worksheet = spreadsheet.worksheet("XP & Downtime Logs")
+
+        # ---------------------------------
+        # STEP 1: Clear existing log rows
+        # ---------------------------------
+        clear_range = "AF12:BB199"
+        worksheet.batch_clear([clear_range])
+        logger.info(f"Cleared existing log entries in range {clear_range}")
+
+        # ---------------------------------
+        # STEP 2: Prepare new rows
+        # ---------------------------------
+        start_row = 12
+        all_row_values = []
+
+        for entry in self.dta_log:
+            # --- Timestamp formatting ---
+            raw_ts = entry.get("timestamp")
+            try:
+                ts_dt = datetime.fromisoformat(raw_ts)
+            except (TypeError, ValueError):
+                ts_dt = datetime.utcnow()
+            ts = ts_dt.strftime("%d-%m-%Y")
+
+            # --- Parse delta (handle + / - prefixes) ---
+            raw_delta = str(entry.get("delta", "0")).strip()
+            sign = 1
+            if raw_delta.startswith("+"):
+                raw_delta = raw_delta[1:]
+            elif raw_delta.startswith("-"):
+                sign = -1
+                raw_delta = raw_delta[1:]
+
+            try:
+                if "." in raw_delta:
+                    delta_value = float(raw_delta)
+                else:
+                    delta_value = int(raw_delta)
+            except ValueError:
+                delta_value = 0
+
+            sheet_value = abs(delta_value)
+            comment = entry.get("reasoning", "")
+
+            # --- Resolve member in the guild using user_id ---
+            user_id = entry.get("user")
+            username = "N/A"
+            try:
+                member = ctx.guild.get_member(int(user_id))
+                if member:
+                    username = member.name
+            except Exception as e:
+                logger.warning(f"Failed to resolve member for ID {user_id}: {e}")
+
+            # --- Fill row (AF:BB → 23 columns) ---
+            row_values = [""] * 23
+            row_values[0] = ts  # AF
+            if sign >= 0:
+                row_values[4] = sheet_value  # AJ (Gained)
+            else:
+                row_values[7] = sheet_value  # AM (Spent)
+            row_values[10] = comment  # AP
+            row_values[22] = username  # BB
+
+            all_row_values.append(row_values)
+
+        # ---------------------------------
+        # STEP 3: Single batch update
+        # ---------------------------------
+        if all_row_values:
+            end_row = start_row + len(all_row_values) - 1
+            update_range = f"AF{start_row}:BB{end_row}"
+            worksheet.update(update_range, all_row_values)
+            logger.info(
+                f"Wrote {len(all_row_values)} DTA log entries to 'XP & Downtime Logs' "
+                f"(rows {start_row}-{end_row}) using guild member resolution"
+            )
+        else:
+            logger.info("No rows to write after processing DTA log.")
