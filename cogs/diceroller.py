@@ -8,10 +8,9 @@ from libs.roller import process_willpower, resolve_dice_pool, roll_dice, build_r
 from dotenv import dotenv_values
 config = dotenv_values(".env")
 
-import logging
 from typing import List, Tuple
 
-
+import logging
 logger = logging.getLogger(__name__)
 
 class Diceroller(commands.Cog):

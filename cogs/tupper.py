@@ -10,7 +10,7 @@ class Tupper(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.tupper_map = {}  # msg_id -> {"user_id": str, "char_name": str}
-        print("Registered Tupper")
+        logging.info("Registered Tupper")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):

@@ -1,6 +1,7 @@
 import sqlite3
 import json
 from datetime import datetime
+from typing import Tuple, List, Optional, Dict
 
 DB_FILE = "characters.db"
 
@@ -42,7 +43,6 @@ def init_db():
             data TEXT,
             last_updated TEXT,
             keyword TEXT,
-            macro TEXT
         )
         """,
         commit=True,
@@ -196,19 +196,7 @@ def get_all_characters() -> list[dict]:
         })
     return chars
 
-def get_character_macro(char_id: str) -> str:
-    """Get all Dice Macros for a given character
-
-    Args:
-        char_id (str): _description_
-
-    Returns:
-        str: All Macro's for a character
-    """
-    row = execute_query("SELECT macro from parsed_characters where uuid = ?", (char_id,), fetchone=True)
-    return row[0] if row else None
-
-def get_character_by_uuid(uuid: str) -> dict | None:
+def get_character_by_uuid(uuid: str) -> Optional[dict]:
     """Return single character dict by UUID (parsed JSON data)."""
     rows = execute_query(
         "SELECT data FROM parsed_characters WHERE uuid = ?",
@@ -221,4 +209,22 @@ def get_character_by_uuid(uuid: str) -> dict | None:
         return json.loads(rows[0][0])
     except Exception:
         return None
+
+def get_character_macros(char_id: str) -> Dict[str, str]:
+    """Get all dice macros for a given character as a dictionary.
+
+    Args:
+        char_id (str): Character UUID
+
+    Returns:
+        dict[str, str]: {macro_name: macro_expression} or empty dict if none
+    """
+    data = get_character_by_uuid(char_id)
+    if not data:
+        return {}
+
+    macros = data.get("macros")
+    if isinstance(macros, dict):
+        return macros
+    return {}
 

@@ -3,10 +3,14 @@ from discord import app_commands
 import discord
 from libs.character import *
 from cogs.character import *
+
+import logging
+logger = logging.getLogger(__name__)
+
 class DTA(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        print("Registered DTA")
+        logger.info("Registered DTA")
         
     # ---------------------------
     # Autocomplete Helper

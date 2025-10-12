@@ -107,16 +107,15 @@ def process_willpower(roll_str: str, char: "Character") -> Tuple[str, bool]:
 # ---------------------------
 # Utility: Resolve Dice Pool
 # ---------------------------
-def resolve_dice_pool(roll_str: str, char: "Character") -> Tuple[int, bool, List[str]]:
-    """Determine dice pool from either macro or expression"""
-    macro_str = get_character_macro(char.uuid)
-    if macro_str:
-        for macro in macro_str.split(";"):
-            if "=" not in macro:
-                continue
-            name_part, expr = macro.split("=", 1)
-            if roll_str.strip() == name_part.strip():
-                return sum_macro(expr, char=char)
+def resolve_dice_pool(roll_str: str, char: Character) -> Tuple[int, bool, List[str]]:
+    """Determine dice pool from either macro name or raw expression.
+
+    If roll_str matches a macro name, resolve using that macro expression.
+    Otherwise, treat roll_str as a direct dice expression.
+    """
+    macros = get_character_macros(char.uuid)
+    if roll_str in macros:
+        return sum_macro(macros[roll_str], char=char)
 
     return sum_macro(roll_str, char=char)
 
