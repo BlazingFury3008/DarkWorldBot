@@ -82,21 +82,22 @@ class CharacterCog(commands.Cog):
         """Initialise a character into the database"""
         await interaction.response.defer(ephemeral=True)
         try:
+            # Check sharing permissions
             if not await self._sheet_allows_link_edit(url):
                 await interaction.followup.send(
                     "The provided Google Sheet is not shared with 'Anyone with the link can edit'. "
                     "Please open the sheet, click Share, select 'Anyone with the link', and set it to Editor. "
                     "Then try again.",
                     ephemeral=True
-                 )       
-                return     
+                )
+                return
+
             user_id = str(interaction.user.id)
-            char = Character(user_id=user_id, SHEET_URL=url)
+            char = Character(user_id=user_id, SHEET_URL=url)  # Will raise ValueError if bad URL
             char.reset_temp()
             logger.info("Character Fetched")
-        
 
-            # Generate a keyword (used for Tupper functionality later)
+            # Generate keyword & save
             keyword = (char.name or char.uuid).lower().replace(" ", "")
             val = char.save_parsed(keyword=keyword, update=False)
 
@@ -104,26 +105,28 @@ class CharacterCog(commands.Cog):
                 await interaction.followup.send("Character already saved!", ephemeral=True)
                 return
 
+            # Nickname
             base_username = interaction.user.name
-            playername = char.player_name
-            
-            if playername.strip() == "Player Name" or playername.strip() == "":
+            playername = char.player_name or ""
+            if playername.strip() in ("Player Name", ""):
                 new_nick = f"{char.name} || {base_username}"
             else:
                 new_nick = f"{char.name} || {playername}"
 
+            # Starting blood entry
             entry = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "delta": char.max_blood,
-            "comment": "Starting Blood",
-            "before": 0,
-            "result": char.max_blood,
-            "user": str(interaction.user.id),
+                "timestamp": datetime.utcnow().isoformat(),
+                "delta": char.max_blood,
+                "comment": "Starting Blood",
+                "before": 0,
+                "result": char.max_blood,
+                "user": str(interaction.user.id),
             }
             char.curr_blood = char.max_blood
             char.blood_log.append(entry)
             char.save_parsed()
 
+            # Assign roles & nickname
             message = ""
             member = interaction.user
             if isinstance(member, discord.Member):
@@ -133,12 +136,21 @@ class CharacterCog(commands.Cog):
                 except discord.Forbidden:
                     message = "Character saved, but I don't have permission to change your nickname."
 
-            await interaction.followup.send(f"Saved and set nickname to **{new_nick}**\n", ephemeral=True)
-        except Exception as e:
             await interaction.followup.send(
-                f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
+                f"Saved and set nickname to **{new_nick}**\n{message}",
+                ephemeral=True
             )
 
+        except ValueError as ve:
+            # ✅ Handles invalid/missing sheet URL errors gracefully
+            await interaction.followup.send(str(ve), ephemeral=True)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"There was an error: `{type(e).__name__}: {e}`",
+                ephemeral=True
+            )
+            
     @character.command(name="show", description="See the overview of one of your saved characters")
     @app_commands.describe(name="Pick the character to display")
     async def show(self, interaction: discord.Interaction, name: str):

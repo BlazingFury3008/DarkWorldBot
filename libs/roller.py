@@ -251,7 +251,7 @@ async def handle_botch_mention(
 
         if mentionable_roles:
             mentions = " ".join([r.mention for r in mentionable_roles])
-            await interaction.channel.send(f"BOTCH by {char_name} — {mentions}")
+            await interaction.followup.send(f"BOTCH by {char_name} — {mentions}")
 
     except Exception as e:
         logger.exception(f"[ROLL] Error during botch mention: {e}")

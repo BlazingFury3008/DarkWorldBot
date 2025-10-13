@@ -3,6 +3,7 @@ from discord import app_commands
 import discord
 from libs.character import *
 from cogs.character import *
+from libs.help import get_dta_help_embed
 
 import logging
 logger = logging.getLogger(__name__)

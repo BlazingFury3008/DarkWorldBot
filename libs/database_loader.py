@@ -42,7 +42,7 @@ def init_db():
             user_id TEXT,
             data TEXT,
             last_updated TEXT,
-            keyword TEXT,
+            keyword TEXT
         )
         """,
         commit=True,

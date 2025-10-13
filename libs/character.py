@@ -65,11 +65,27 @@ class Character:
                 setattr(self, k, v)
             self.last_updated = datetime.utcnow().isoformat()
         else:
-            logger.info("No cached character → fetching from Google Sheets")
-            client = get_client()
-            spreadsheet = client.open_by_url(self.SHEET_URL)
-            worksheet = spreadsheet.get_worksheet_by_id(0)
-            self.sheet_values = worksheet.get_all_values()
+            # ✅ Validate URL early
+            if not self.SHEET_URL or not self.SHEET_URL.startswith("http"):
+                raise ValueError(
+                    "The provided Google Sheet URL is missing or invalid. "
+                    "Please provide a valid Google Sheets link."
+                )
+
+            try:
+                logger.info("No cached character → fetching from Google Sheets")
+                client = get_client()
+                spreadsheet = client.open_by_url(self.SHEET_URL)
+                worksheet = spreadsheet.get_worksheet_by_id(0)
+                self.sheet_values = worksheet.get_all_values()
+            except Exception as e:
+                # ✅ Catch gspread's URL parse errors or bad link errors
+                logger.error(f"Failed to open Google Sheet for {self.uuid}: {e}")
+                raise ValueError(
+                    "Unable to open the provided Google Sheet. "
+                    "Please check that the URL is correct and publicly accessible."
+                ) from e
+
             self.get_all_data()
             self.curr_blood = self.max_blood
             self.curr_willpower = self.max_willpower

@@ -3,7 +3,7 @@ from discord.ext import commands
 from dotenv import dotenv_values
 import asyncio
 
-from cogs import helper, character, tupper, diceroller, st_commands, dta
+from cogs import character, tupper, diceroller, st_commands, dta, macro, utils, show_help
 from libs.database_loader import init_db
 
 # ---------------------------
@@ -12,25 +12,16 @@ from libs.database_loader import init_db
 import logging
 import sys
 
-# Configure root logger
 logging.basicConfig(
-    level=logging.INFO,  # Use INFO in production to reduce debug noise
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),  # Ensure logs go to stdout for Docker/Heroku
-    ],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-# Reduce noise from discord internals
-#logging.getLogger("discord").setLevel(logging.WARNING)
-#logging.getLogger("discord.http").setLevel(logging.WARNING)
-#logging.getLogger("asyncio").setLevel(logging.WARNING)
-#logging.getLogger("urllib3").setLevel(logging.WARNING)
-
-# App-level logger
 logger = logging.getLogger("bot")
 logger.info("Logging configured successfully.")
+
 # ---------------------------
 # Load configuration from .env
 # ---------------------------
@@ -46,9 +37,9 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-
 # Create the bot instance
 bot = commands.Bot(command_prefix="~", intents=intents)
+
 
 # Register event
 @bot.event
@@ -57,17 +48,23 @@ async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
 
+    # List all servers the bot is in
+    print("Connected to the following servers:")
+    for guild in bot.guilds:
+        print(f"- {guild.name} (ID: {guild.id}) | Members: {guild.member_count}")
+    print('------')
+
+
 # Async function to register cogs
 async def register_bot():
     await bot.add_cog(diceroller.Diceroller(bot))
-    #await bot.add_cog(dta.DTA(bot))
-    #await bot.add_cog(scenetracker.SceneTracker(bot))
-    await bot.add_cog(helper.Helper(bot))
+    await bot.add_cog(utils.Utils(bot))
     await bot.add_cog(character.CharacterCog(bot))
     await bot.add_cog(st_commands.ST(bot))
     await bot.add_cog(dta.DTA(bot))
+    await bot.add_cog(macro.Macro(bot))
+    await bot.add_cog(show_help.Help(bot))
 
-    #await bot.add_cog(tupper.Tupper(bot))
 
 # Entrypoint
 if __name__ == "__main__":
