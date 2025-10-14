@@ -56,6 +56,8 @@ class Character:
         self.total_dta = 0
         self.dta_log = []
         self.blood_log = []
+        
+        
 
         cached = load_character_json(self.uuid, self.user_id) if use_cache else None
 
@@ -145,6 +147,15 @@ class Character:
             setattr(char, k, v)
 
         return char
+    
+    @classmethod
+    def load_for_user(cls, user_id: str):
+        name = list_characters_for_user(user_id)
+        name = name[0]
+        if not name:
+            return None
+        return cls.load_by_name(name, user_id)
+
 
     def needs_refresh(self, max_age_minutes: int = 60) -> bool:
         """Check if cached data is older than max_age_minutes"""

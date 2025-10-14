@@ -39,7 +39,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS parsed_characters (
             uuid TEXT PRIMARY KEY,
-            user_id TEXT,
+            user_id TEXT UNIQUE,
             data TEXT,
             last_updated TEXT,
             keyword TEXT
@@ -94,13 +94,17 @@ def get_character_by_json_field(user_id: str, field: str, value: str) -> dict | 
 
 
 def list_characters_for_user(user_id: str) -> list[str]:
-    """List character names for a user"""
-    rows = execute_query(
+    """Return a list with the user's character name (0 or 1 elements)"""
+    row = execute_query(
         "SELECT json_extract(data, '$.name') FROM parsed_characters WHERE user_id = ?",
         (user_id,),
-        fetchall=True,
+        fetchone=True,
     )
-    return [r[0] for r in rows if r and r[0]]
+
+    if not row or row[0] is None:
+        return []
+
+    return [row[0]]
 
 def list_all_characters() -> list[dict]:
     """List all characters with uuid, name, player_name, and user_id."""

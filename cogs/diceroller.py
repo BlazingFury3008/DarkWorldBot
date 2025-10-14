@@ -10,7 +10,6 @@ from libs.help import get_roll_help_embed
 
 config = dotenv_values(".env")
 
-from typing import List
 import re
 import logging
 logger = logging.getLogger(__name__)
@@ -19,24 +18,6 @@ class Diceroller(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         logger.info("Registered Diceroller")
-
-    # ---------------------------
-    # Autocomplete Helper
-    # ---------------------------
-    async def _character_name_autocomplete(
-        self, interaction: discord.Interaction, current: str
-    ) -> List[app_commands.Choice[str]]:
-        user_id = str(interaction.user.id)
-        try:
-            names = list_characters_for_user(user_id) or []
-        except Exception as e:
-            logger.error(f"Autocomplete error: {e}")
-            names = []
-
-        return [
-            app_commands.Choice(name=n, value=n)
-            for n in names if current.lower() in n.lower()
-        ][:25]
 
     # ---------------------------
     # Helper: Expand macros anywhere in expression
@@ -51,26 +32,20 @@ class Diceroller(commands.Cog):
         if not macros:
             return roll_str
 
-        # Case-insensitive lookup (optional but user-friendly)
         macro_lookup = {k.lower(): v for k, v in macros.items()}
-
-        # Split on + and - while keeping the operators
         tokens = re.split(r'([+-])', roll_str)
         expanded_tokens = []
 
         for token in tokens:
             t = token.strip()
 
-            # Preserve operators exactly
             if t in {"+", "-"}:
                 expanded_tokens.append(t)
                 continue
 
-            # Replace token if it's a macro name
             if t.lower() in macro_lookup:
                 expanded_tokens.append(macro_lookup[t.lower()])
             else:
-                # Keep the original token (trimmed)
                 expanded_tokens.append(t)
 
         expanded = "".join(expanded_tokens)
@@ -82,7 +57,6 @@ class Diceroller(commands.Cog):
     # ---------------------------
     @app_commands.command(name="roll", description="Roll dice using a macro or expression")
     @app_commands.describe(
-        name="Character name",
         roll_str="Macro name or expression (e.g. Dexterity+Melee or Attack+4+WP)",
         difficulty="Difficulty of the roll",
         comment="Optional comment to display with the roll"
@@ -90,19 +64,22 @@ class Diceroller(commands.Cog):
     async def roll(
         self,
         interaction: discord.Interaction,
-        name: str,
         roll_str: str,
         difficulty: int,
         comment: str = None
     ):
+        """Roll dice for the user's single character"""
         await interaction.response.defer()
 
         try:
-            # Load character
             user_id = str(interaction.user.id)
-            char = Character.load_by_name(name, user_id)
+            char = Character.load_for_user(user_id)
+
             if not char:
-                await interaction.followup.send(f"No character named {name} found.")
+                await interaction.followup.send(
+                    "You don't have a character registered yet. Use `/character init` first.",
+                    ephemeral=True
+                )
                 return
 
             # Expand macros anywhere in the expression
@@ -151,7 +128,3 @@ class Diceroller(commands.Cog):
         except Exception as e:
             logger.exception(f"[ROLL] Roll command error: {e}")
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
-
-    @roll.autocomplete("name")
-    async def roll_autocomplete(self, interaction: discord.Interaction, current: str):
-        return await self._character_name_autocomplete(interaction, current)
