@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands, Role
 from libs.character import *
+from libs.personas import *
 from libs.macro import *
 from libs.role import *
 from libs.roller import process_willpower, resolve_dice_pool, roll_dice, build_roll_embed, handle_botch_mention
@@ -64,7 +65,7 @@ class CharacterCog(commands.Cog):
         try:
             user_id = str(interaction.user.id)
 
-            # ✅ Check if the user already has a character
+            # Check if the user already has a character
             existing_chars = list_characters_for_user(user_id) or []
             if len(existing_chars) > 0:
                 await interaction.followup.send(
@@ -87,10 +88,25 @@ class CharacterCog(commands.Cog):
             logger.info("Character Fetched")
 
             keyword = (char.name or char.uuid).lower().replace(" ", "")
-            val = char.save_parsed(keyword=keyword, update=False)
+            val = char.save_parsed(update=False)
             if val == -1:
                 await interaction.followup.send("Character already saved!", ephemeral=True)
                 return
+
+            try:
+                keyword = str.lower(char.name[:4])
+                persona_uuid = str(uuid.uuid4())
+                header = generate_default_header(char)
+                create_or_update_persona(uuid=persona_uuid, user_id=user_id, name=char.name, header=header, keyword=keyword, image=None)
+                logger.info(f"Persona created for character {char.name} ({char.uuid}) -> Persona ID: {persona_uuid}")
+            except Exception as e:
+                logger.error(f"Failed to create persona for {char.uuid}: {e}")
+                await interaction.followup.send(
+                    f"Character saved, but there was an error creating the persona: `{e}`",
+                    ephemeral=True
+                )
+                return
+
 
             base_username = interaction.user.name
             playername = char.player_name or ""
@@ -314,10 +330,11 @@ class CharacterCog(commands.Cog):
                 f"There was an error: `{type(e).__name__}: {e}`", ephemeral=True
             )
 
+
     # ---------------------------
     # Resync Character
     # ---------------------------
-    @character.command(name="resync", description="Resync your character")
+    @character.command(name="resync", description="Resync your character and linked persona")
     async def resync(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -329,8 +346,13 @@ class CharacterCog(commands.Cog):
                 )
                 return
 
+            # Store old name before refetching
+            old_name = char.name
+
+            # Refresh character data (pulls in the new name)
             char.refetch_data()
 
+            # Update nickname
             base_username = interaction.user.name
             playername = char.player_name or ""
             new_nick = (
@@ -349,7 +371,12 @@ class CharacterCog(commands.Cog):
                         ephemeral=True
                     )
 
+            # Update linked persona name if it matches the old character name
+            update_persona_name_by_old_name(user_id, old_name, char.name)
+
+            # Reassign roles if needed
             await assign_roles_for_character(interaction.user, char)
+
             await interaction.followup.send("Resynced successfully!", ephemeral=True)
 
         except Exception as e:

@@ -1,20 +1,22 @@
 import sqlite3
 import json
 from datetime import datetime
-from typing import Tuple, List, Optional, Dict
+from typing import Optional, Dict, Any
 
 DB_FILE = "characters.db"
 
-# -----------------------------
+# =============================
 # Core Database Utilities
-# -----------------------------
+# =============================
+
 def execute_query(
     query: str,
     params: tuple = (),
+    *,
     fetchone: bool = False,
     fetchall: bool = False,
     commit: bool = False,
-):
+) -> Optional[Any]:
     """General-purpose query executor"""
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
@@ -48,23 +50,38 @@ def init_db():
         commit=True,
     )
 
-# -----------------------------
-# Character Operations
-# -----------------------------
-def save_character_json(uuid: str, user_id: str, data: dict, keyword: str = None):
-    """Insert or update a character"""
     execute_query(
         """
-        REPLACE INTO parsed_characters (uuid, user_id, data, last_updated, keyword)
-        VALUES (?, ?, ?, ?, ?)
+        CREATE TABLE IF NOT EXISTS persona (
+            uuid TEXT PRIMARY KEY,
+            user_id TEXT,
+            name TEXT,
+            header TEXT,
+            keyword TEXT,
+            image BLOB
+        )
         """,
-        (uuid, user_id, json.dumps(data), datetime.utcnow().isoformat(), keyword),
+        commit=True,
+    )
+
+# =============================
+# Character Operations
+# =============================
+
+def save_character_json(uuid: str, user_id: str, data: dict) -> None:
+    """Insert or update a character entry (replaces existing if uuid matches)."""
+    execute_query(
+        """
+        REPLACE INTO parsed_characters (uuid, user_id, data, last_updated)
+        VALUES (?, ?, ?, ?)
+        """,
+        (uuid, user_id, json.dumps(data), datetime.utcnow().isoformat()),
         commit=True,
     )
 
 
-def load_character_json(uuid: str, user_id: str | None = None) -> dict | None:
-    """Load character JSON by uuid (optionally filtered by user_id)"""
+def load_character_json(uuid: str, user_id: Optional[str] = None) -> Optional[dict]:
+    """Load character JSON by uuid (optionally filtered by user_id)."""
     if user_id:
         row = execute_query(
             "SELECT data FROM parsed_characters WHERE uuid = ? AND user_id = ?",
@@ -80,8 +97,8 @@ def load_character_json(uuid: str, user_id: str | None = None) -> dict | None:
     return json.loads(row[0]) if row else None
 
 
-def get_character_by_json_field(user_id: str, field: str, value: str) -> dict | None:
-    """Return character data by matching JSON field in 'data'"""
+def get_character_by_json_field(user_id: str, field: str, value: str) -> Optional[dict]:
+    """Return character data by matching a JSON field within 'data'."""
     row = execute_query(
         f"""
         SELECT data FROM parsed_characters
@@ -94,17 +111,14 @@ def get_character_by_json_field(user_id: str, field: str, value: str) -> dict | 
 
 
 def list_characters_for_user(user_id: str) -> list[str]:
-    """Return a list with the user's character name (0 or 1 elements)"""
+    """Return a list containing the user's character name (0 or 1 elements)."""
     row = execute_query(
         "SELECT json_extract(data, '$.name') FROM parsed_characters WHERE user_id = ?",
         (user_id,),
         fetchone=True,
     )
+    return [row[0]] if row and row[0] is not None else []
 
-    if not row or row[0] is None:
-        return []
-
-    return [row[0]]
 
 def list_all_characters() -> list[dict]:
     """List all characters with uuid, name, player_name, and user_id."""
@@ -112,51 +126,46 @@ def list_all_characters() -> list[dict]:
         "SELECT uuid, user_id, data FROM parsed_characters",
         fetchall=True,
     )
-
     characters = []
-    for r in rows:
-        if not r or not r[0] or not r[2]:
+    for uuid, user_id, data_json in rows:
+        if not uuid or not data_json:
             continue
         try:
-            data = json.loads(r[2])
+            data = json.loads(data_json)
         except Exception:
             continue
 
         characters.append({
-            "uuid": r[0],
-            "user_id": r[1],
+            "uuid": uuid,
+            "user_id": user_id,
             "name": data.get("name", "Unknown"),
             "player_name": data.get("player_name", "Unknown"),
         })
-
     return characters
 
-def update_character_field(uuid: str, user_id: str, field: str, value: str) -> bool:
-    """Update a single column (not JSON) for a character"""
-    query = f"UPDATE parsed_characters SET {field} = ? WHERE uuid = ? AND user_id = ?"
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute(query, (value, uuid, user_id))
-    updated = cur.rowcount > 0
-    conn.commit()
-    conn.close()
-    return updated
 
-# -----------------------------
-# Thin Wrappers (Convenience)
-# -----------------------------
-def get_character_by_url(sheet_url: str, user_id: str) -> dict | None:
-    """Return character row if a character with the same URL already exists"""
+def update_character_field(uuid: str, user_id: str, field: str, value: str) -> bool:
+    """Update a single non-JSON field (e.g., keyword) for a character."""
+    execute_query(
+        f"UPDATE parsed_characters SET {field} = ? WHERE uuid = ? AND user_id = ?",
+        (value, uuid, user_id),
+        commit=True,
+    )
+    return True
+
+
+def get_character_by_url(sheet_url: str, user_id: str) -> Optional[dict]:
+    """Return character row if a character with the same URL already exists."""
     return get_character_by_json_field(user_id, "SHEET_URL", sheet_url)
 
 
 def update_character_keyword(uuid: str, user_id: str, new_keyword: str) -> bool:
-    """Update the keyword for a specific character"""
+    """Update the keyword for a specific character."""
     return update_character_field(uuid, user_id, "keyword", new_keyword)
 
 
-def get_character_uuid_by_name(user_id: str, name: str) -> str | None:
-    """Get a character's UUID by name"""
+def get_character_uuid_by_name(user_id: str, name: str) -> Optional[str]:
+    """Get a character's UUID by name."""
     row = execute_query(
         """
         SELECT uuid FROM parsed_characters
@@ -169,7 +178,7 @@ def get_character_uuid_by_name(user_id: str, name: str) -> str | None:
 
 
 def get_characters_for_user(user_id: str) -> list[dict]:
-    """Return all characters for a user with name + keyword"""
+    """Return all characters for a user with name + keyword."""
     rows = execute_query(
         "SELECT data, keyword FROM parsed_characters WHERE user_id = ?",
         (user_id,),
@@ -181,8 +190,9 @@ def get_characters_for_user(user_id: str) -> list[dict]:
         chars.append({"name": data.get("name"), "keyword": keyword})
     return chars
 
+
 def get_all_characters() -> list[dict]:
-    """Return all characters across all users"""
+    """Return all characters across all users."""
     rows = execute_query(
         "SELECT uuid, user_id, data, keyword, last_updated FROM parsed_characters",
         fetchall=True,
@@ -196,39 +206,126 @@ def get_all_characters() -> list[dict]:
             "name": data.get("name"),
             "keyword": keyword,
             "last_updated": last_updated,
-            "data": data
+            "data": data,
         })
     return chars
 
+
 def get_character_by_uuid(uuid: str) -> Optional[dict]:
     """Return single character dict by UUID (parsed JSON data)."""
-    rows = execute_query(
+    row = execute_query(
         "SELECT data FROM parsed_characters WHERE uuid = ?",
         (uuid,),
-        fetchall=True,
+        fetchone=True,
     )
-    if not rows:
-        return None
-    try:
-        return json.loads(rows[0][0])
-    except Exception:
-        return None
+    return json.loads(row[0]) if row else None
+
 
 def get_character_macros(char_id: str) -> Dict[str, str]:
-    """Get all dice macros for a given character as a dictionary.
-
-    Args:
-        char_id (str): Character UUID
-
-    Returns:
-        dict[str, str]: {macro_name: macro_expression} or empty dict if none
-    """
+    """Get all dice macros for a given character as a dictionary."""
     data = get_character_by_uuid(char_id)
     if not data:
         return {}
-
     macros = data.get("macros")
-    if isinstance(macros, dict):
-        return macros
-    return {}
+    return macros if isinstance(macros, dict) else {}
 
+# =============================
+# Persona Operations
+# =============================
+
+def create_or_update_persona(uuid: str, user_id: str, header: str, name:str, keyword: Optional[str] = None, image: Optional[bytes] = None) -> None:
+    """Insert or update a persona entry."""
+    execute_query(
+        """
+        REPLACE INTO persona (uuid, user_id, header, keyword, image, name)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (uuid, user_id, header, keyword, image, name),
+        commit=True,
+    )
+
+
+def get_persona(uuid: str, user_id: Optional[str] = None) -> Optional[dict]:
+    """Retrieve a persona by UUID (and optionally user)."""
+    if user_id:
+        row = execute_query(
+            "SELECT uuid, user_id, header, keyword, image, name FROM persona WHERE uuid = ? AND user_id = ?",
+            (uuid, user_id),
+            fetchone=True,
+        )
+    else:
+        row = execute_query(
+            "SELECT uuid, user_id, header, keyword, image, name FROM persona WHERE uuid = ?",
+            (uuid,),
+            fetchone=True,
+        )
+    if not row:
+        return None
+    return {
+        "uuid": row[0],
+        "user_id": row[1],
+        "header": row[2],
+        "keyword": row[3],
+        "image": row[4],
+        "name": row[5],
+    }
+
+
+def list_personas_for_user(user_id: str) -> list[dict]:
+    """List all personas for a given user."""
+    rows = execute_query(
+        "SELECT uuid, header, keyword, name FROM persona WHERE user_id = ?",
+        (user_id,),
+        fetchall=True,
+    )
+    return [{"uuid": r[0], "header": r[1], "keyword": r[2], "name": r[3]} for r in rows]
+
+
+def update_persona_keyword(uuid: str, user_id: str, new_keyword: str) -> bool:
+    """Update the keyword for a persona."""
+    execute_query(
+        "UPDATE persona SET keyword = ? WHERE uuid = ? AND user_id = ?",
+        (new_keyword, uuid, user_id),
+        commit=True,
+    )
+    return True
+
+
+def update_persona_image(uuid: str, user_id: str, new_image: bytes) -> bool:
+    """Update the image blob for a persona."""
+    execute_query(
+        "UPDATE persona SET image = ? WHERE uuid = ? AND user_id = ?",
+        (new_image, uuid, user_id),
+        commit=True,
+    )
+    return True
+
+
+def update_persona_header(uuid: str, user_id: str, new_header: str) -> bool:
+    """Update the header for a persona."""
+    execute_query(
+        "UPDATE persona SET header = ? WHERE uuid = ? AND user_id = ?",
+        (new_header, uuid, user_id),
+        commit=True,
+    )
+    return True
+
+
+def update_persona_name_by_old_name(user_id: str, old_name: str, new_name: str) -> bool:
+    """Update the persona name for a given user, matching old name to new name."""
+    execute_query(
+        "UPDATE persona SET name = ? WHERE user_id = ? AND name = ?",
+        (new_name, user_id, old_name),
+        commit=True,
+    )
+    return True
+
+
+def delete_persona(uuid: str, user_id: str) -> bool:
+    """Delete a persona entry."""
+    execute_query(
+        "DELETE FROM persona WHERE uuid = ? AND user_id = ?",
+        (uuid, user_id),
+        commit=True,
+    )
+    return True

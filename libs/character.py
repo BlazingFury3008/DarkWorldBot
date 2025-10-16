@@ -436,49 +436,34 @@ class Character:
         self.save_parsed(update=True)
 
 
-    def save_parsed(self, keyword: str = None, update=True):
+    def save_parsed(self, update=True):
             data = {
                 k: v for k, v in self.__dict__.items()
                 if k not in ("sheet_values",)
             }
 
-            # Auto-generate keyword if not passed
-            if not keyword:
-                keyword = (self.name or self.uuid).lower().replace(" ", "")
-
-            save_character_json(self.uuid, self.user_id, data, keyword)
+            save_character_json(self.uuid, self.user_id, data)
             return 0
         
 
 
 
     def to_dict(self) -> dict:
-        """Return a JSON-safe dict representation of the character"""
-        return {
-            "uuid": self.uuid,
-            "user_id": self.user_id,
-            "name": getattr(self, "name", None),
-            "player_name": getattr(self, "player_name", None),
-            "concept": getattr(self, "concept", None),
-            "clan": getattr(self, "clan", None),
-            "generation": getattr(self, "generation", None),
-            "sect": getattr(self, "sect", None),
-            "attributes": getattr(self, "attributes", []),
-            "abilities": getattr(self, "abilities", {}),
-            "disciplines": getattr(self, "disciplines", []),
-            "backgrounds": getattr(self, "backgrounds", []),
-            "virtues": getattr(self, "virtues", []),
-            "path": getattr(self, "path", None),
-            "merits": getattr(self, "merits", []),
-            "flaws": getattr(self, "flaws", []),
-            "derangements": getattr(self, "derangments", []),
-            "combo_disciplines": getattr(self, "combo_disciplines", []),
-            "rituals": getattr(self, "rituals", []),
-            "magic_paths": getattr(self, "magic_paths", []),
-            "max_willpower": getattr(self, "max_willpower", 0),
-            "max_blood": getattr(self, "max_blood", 0),
-            "blood_per_turn": getattr(self, "blood_per_turn", 0),
-        }
+        """Return a JSON-safe dict representation of the character automatically."""
+        result = {}
+
+        for key, value in self.__dict__.items():
+            # Skip private or internal attributes like SQLAlchemy state
+            if key.startswith("_"):
+                continue
+
+            # Convert nested objects that might have their own to_dict method
+            if hasattr(value, "to_dict"):
+                result[key] = value.to_dict()
+            else:
+                result[key] = value
+
+        return result
 
     @classmethod
     def load_parsed(cls, uuid: str, user_id: str | None = None) -> Optional["Character"]:
