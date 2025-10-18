@@ -288,7 +288,7 @@ class Character:
         try:
             name = self.sheet_values[row-1][col]
             level = self.sheet_values[row-1][col - 1]
-            sorc_type = self.sheet_values[row-1][col+10]
+            sorc_type = self.sheet_values[row-1][col+9]
             
             return {
                 "name": name,

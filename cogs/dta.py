@@ -1,18 +1,20 @@
+import discord
 from discord.ext import commands
 from discord import app_commands
-import discord
-from libs.character import *
-from cogs.character import *
-from libs.help import get_dta_help_embed
 from datetime import datetime
-
+import asyncio
 import logging
+
+from libs.character import Character
+from libs.help import get_dta_help_embed
+
 logger = logging.getLogger(__name__)
+
 
 class DTA(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        logger.info("Registered DTA")
+        logger.info("Registered DTA Cog")
 
     dta = app_commands.Group(
         name="dta",
@@ -22,10 +24,10 @@ class DTA(commands.Cog):
     # ---------------------------
     # /dta log
     # ---------------------------
-    @dta.command(name="log", description="See the current DTA Log for your character")
+    @dta.command(name="log", description="View your current DTA log.")
     async def dta_log(self, interaction: discord.Interaction):
-        """Display the DTA log for the user's character in a table format."""
-        await interaction.response.defer()
+        """Display the DTA log for the user's character in a formatted table."""
+        await interaction.response.defer(ephemeral=True)
         user_id = str(interaction.user.id)
 
         try:
@@ -44,21 +46,19 @@ class DTA(commands.Cog):
             )
             embed.set_footer(text="Most recent entries last")
 
-            if not char.dta_log or len(char.dta_log) == 0:
+            log_entries = getattr(char, "dta_log", []) or []
+            if not log_entries:
                 embed.add_field(
                     name="No Entries",
                     value="This character has no DTA log entries yet.",
                     inline=False
                 )
             else:
-                # Sort by timestamp, oldest first
-                sorted_log = sorted(
-                    char.dta_log,
-                    key=lambda x: x.get("timestamp", ""),
-                    reverse=False
-                )
+                # Sort by timestamp ascending
+                sorted_log = sorted(log_entries, key=lambda x: x.get("timestamp", ""))
 
-                header = f"{'Date':<12} | {'Δ':<5} | {'Result':<6} | {'Reason':<16}"
+                # Build table
+                header = f"{'Date':<12} | {'Δ':<6} | {'Result':<7} | {'Reason':<30}"
                 separator = "-" * len(header)
                 lines = [header, separator]
 
@@ -67,46 +67,47 @@ class DTA(commands.Cog):
                         ts = datetime.fromisoformat(entry["timestamp"])
                         formatted_date = ts.strftime("%d/%m/%Y")
                     except Exception:
-                        formatted_date = entry.get("timestamp", "")
+                        formatted_date = entry.get("timestamp", "??")
 
                     delta = entry.get("delta", "")
-                    reasoning = entry.get("reasoning", "")[:40]
                     result = str(entry.get("result", ""))
-
-                    line = f"{formatted_date:<12} | {delta:<5} | {result:<6} | {reasoning[:16]}"
+                    reasoning = entry.get("reasoning", "")[:30]
+                    line = f"{formatted_date:<12} | {delta:<6} | {result:<7} | {reasoning}"
                     lines.append(line)
 
                 table_text = "\n".join(lines)
+
+                # Split into chunks within Discord’s 1024-char field limit
                 while table_text:
                     if len(table_text) <= 1024:
                         embed.add_field(name="Log", value=f"```{table_text}```", inline=False)
                         break
-                    else:
-                        split_index = table_text.rfind("\n", 0, 1024)
-                        chunk = table_text[:split_index]
-                        embed.add_field(name="Log", value=f"```{chunk}```", inline=False)
-                        table_text = table_text[split_index + 1:]
+                    split_index = table_text.rfind("\n", 0, 1024)
+                    chunk = table_text[:split_index]
+                    embed.add_field(name="Log", value=f"```{chunk}```", inline=False)
+                    table_text = table_text[split_index + 1:]
 
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:
-            logger.warning(f"[DTA LOG] Error loading DTA log for user {user_id}: {e}")
+            logger.exception(f"[DTA LOG] Error loading DTA log for user {user_id}: {e}")
             await interaction.followup.send(
-                "An error occurred while retrieving the DTA log.",
+                "An error occurred while retrieving your DTA log.",
                 ephemeral=True
             )
 
     # ---------------------------
     # /dta spend
     # ---------------------------
-    @dta.command(name="spend", description="Spend accrued DTA")
+    @dta.command(name="spend", description="Spend accrued DTA.")
     @app_commands.describe(
-        amount="Amount of DTA to spend",
-        reason="Reason for spending"
+        amount="Amount of DTA to spend.",
+        reason="Reason for spending."
     )
     async def spend_dta(self, interaction: discord.Interaction, amount: int, reason: str):
         await interaction.response.defer(ephemeral=True)
         user_id = str(interaction.user.id)
+
         try:
             char = Character.load_for_user(user_id)
             if not char:
@@ -116,10 +117,13 @@ class DTA(commands.Cog):
                 )
                 return
 
-            amount = abs(amount)
+            if amount <= 0:
+                await interaction.followup.send("Amount must be greater than 0.", ephemeral=True)
+                return
+
             if char.curr_dta < amount:
                 await interaction.followup.send(
-                    f"Not enough DTA points to spend (currently {char.curr_dta})",
+                    f"Not enough DTA points (you currently have {char.curr_dta}).",
                     ephemeral=True
                 )
                 return
@@ -138,24 +142,31 @@ class DTA(commands.Cog):
             }
 
             char.dta_log.append(entry)
-            char.write_dta_log(ctx=interaction)
+
+            # Handle synchronous vs async safely
+            try:
+                result = char.write_dta_log(ctx=interaction)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.warning(f"[DTA SPEND] Write error: {e}")
+
             char.save_parsed()
-            await interaction.followup.send("DTA spent and log updated!", ephemeral=True)
+            await interaction.followup.send(f"Spent {amount} DTA on '{reason}'. Log updated.", ephemeral=True)
+            logger.info(f"[DTA SPEND] {user_id} spent {amount} DTA ({char.name}) for: {reason}")
 
         except Exception as e:
-            logger.warning(f"[DTA SPEND] Error for user {user_id}: {e}")
-            await interaction.followup.send(
-                "An error occurred while spending DTA.",
-                ephemeral=True
-            )
+            logger.exception(f"[DTA SPEND] Error for user {user_id}: {e}")
+            await interaction.followup.send("An error occurred while spending DTA.", ephemeral=True)
 
     # ---------------------------
     # /dta sync
     # ---------------------------
-    @dta.command(name="sync", description="Upload your DTA log to the sheet")
+    @dta.command(name="sync", description="Upload your DTA log to the Google Sheet.")
     async def sync(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = str(interaction.user.id)
+
         try:
             char = Character.load_for_user(user_id)
             if not char:
@@ -165,12 +176,24 @@ class DTA(commands.Cog):
                 )
                 return
 
-            char.write_dta_log(ctx=interaction)
-            await interaction.followup.send("DTA log synced with the sheet!", ephemeral=True)
+            # Handle sync safely for both async/sync versions
+            try:
+                result = char.write_dta_log(ctx=interaction)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.warning(f"[DTA SYNC] Write error: {e}")
+
+            await interaction.followup.send("DTA log synced successfully with the sheet.", ephemeral=True)
+            logger.info(f"[DTA SYNC] Synced DTA log for {user_id} ({char.name}).")
 
         except Exception as e:
-            logger.warning(f"[DTA SYNC] Error for user {user_id}: {e}")
-            await interaction.followup.send(
-                "An error occurred while syncing the DTA log.",
-                ephemeral=True
-            )
+            logger.exception(f"[DTA SYNC] Error for user {user_id}: {e}")
+            await interaction.followup.send("An error occurred while syncing the DTA log.", ephemeral=True)
+
+
+# ---------------------------
+# Cog Setup Function
+# ---------------------------
+async def setup(bot: commands.Bot):
+    await bot.add_cog(DTA(bot))

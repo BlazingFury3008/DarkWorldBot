@@ -1,14 +1,15 @@
+import discord
 from discord.ext import commands
 from discord import app_commands
-import discord
 
 from libs.character import Character
 from libs.macro import validate_macro
 from libs.roller import resolve_dice_pool
-from libs.help import get_macro_help_embed 
+from libs.help import get_macro_help_embed
 
 import logging
 logger = logging.getLogger(__name__)
+
 
 class Macro(commands.Cog):
     def __init__(self, bot):
@@ -19,16 +20,17 @@ class Macro(commands.Cog):
     # Macro Command Group
     # ---------------------------
     macro = app_commands.Group(
-        name="macro", description="All commands related to macros"
+        name="macro",
+        description="Commands related to character macros"
     )
 
     # ---------------------------
     # CREATE MACRO
     # ---------------------------
-    @macro.command(name="new", description="Create a new macro for your character")
+    @macro.command(name="new", description="Create a new macro for your character.")
     @app_commands.describe(
-        name="Name of the new macro",
-        macro_str="The dice expression for the macro (e.g., Dexterity+Melee+2)"
+        name="Name of the new macro.",
+        macro_str="The dice expression (e.g., Dexterity+Melee+2)."
     )
     async def create_macro(
         self,
@@ -46,31 +48,35 @@ class Macro(commands.Cog):
                 )
                 return
 
-            # Step 0: Prevent +WP usage
-            if "+WP" in macro_str.upper():
+            if not name.strip() or not macro_str.strip():
                 await interaction.response.send_message(
-                    "Macros cannot contain '+WP'. Willpower must be added at roll time.",
+                    "Macro name and expression cannot be empty.",
                     ephemeral=True
                 )
                 return
 
-            # Step 1: Validate syntax
+            if "+WP" in macro_str.upper():
+                await interaction.response.send_message(
+                    "Macros cannot contain '+WP'. Willpower must be added manually when rolling.",
+                    ephemeral=True
+                )
+                return
+
             valid, error = validate_macro(f"{name}={macro_str}")
             if not valid:
                 await interaction.response.send_message(f"Invalid macro format: {error}", ephemeral=True)
                 return
 
-            # Step 2: Ensure expression can be resolved
-            total_pool, spec_used, specs_applied = resolve_dice_pool(macro_str, char)
+            total_pool, _, specs_applied = resolve_dice_pool(macro_str, char)
             if total_pool == -1:
                 await interaction.response.send_message(
-                    f"Macro expression could not be resolved. Check for missing traits or invalid specializations.",
+                    "Macro expression could not be resolved. Check for missing traits or invalid specializations.",
                     ephemeral=True
                 )
                 return
 
-            # Step 3: Save
-            if not hasattr(char, "macros") or char.macros is None:
+            # Ensure macros attribute exists
+            if not isinstance(getattr(char, "macros", None), dict):
                 char.macros = {}
 
             if name in char.macros:
@@ -83,26 +89,25 @@ class Macro(commands.Cog):
             char.macros[name] = macro_str
             char.save_parsed()
 
-            value_str = f"Dicepool: {total_pool}"
-            if specs_applied:
-                value_str += f" (using {', '.join(specs_applied)})"
-
+            specs_text = f" (using {', '.join(specs_applied)})" if specs_applied else ""
             await interaction.response.send_message(
-                f"Macro '{name}' created.\n{value_str}",
+                f"Macro '{name}' created successfully.\nDicepool: {total_pool}{specs_text}",
                 ephemeral=True
             )
 
+            logger.info(f"User {user_id} created macro '{name}' for {char.name} ({total_pool} dice).")
+
         except Exception as e:
-            logger.error(f"Error creating macro: {e}")
+            logger.exception(f"Error creating macro for user {user_id}: {e}")
             await interaction.response.send_message(f"Error creating macro: {e}", ephemeral=True)
 
     # ---------------------------
     # UPDATE MACRO
     # ---------------------------
-    @macro.command(name="update", description="Update an existing macro for your character")
+    @macro.command(name="update", description="Update an existing macro for your character.")
     @app_commands.describe(
-        name="Name of the macro to update",
-        macro_str="New dice expression"
+        name="Name of the macro to update.",
+        macro_str="New dice expression."
     )
     async def update_macro(
         self,
@@ -122,7 +127,7 @@ class Macro(commands.Cog):
 
             if "+WP" in macro_str.upper():
                 await interaction.response.send_message(
-                    "Macros cannot contain '+WP'. Willpower must be added at roll time.",
+                    "Macros cannot contain '+WP'. Willpower must be added manually when rolling.",
                     ephemeral=True
                 )
                 return
@@ -132,7 +137,7 @@ class Macro(commands.Cog):
                 await interaction.response.send_message(f"Invalid macro format: {error}", ephemeral=True)
                 return
 
-            total_pool, spec_used, specs_applied = resolve_dice_pool(macro_str, char)
+            total_pool, _, specs_applied = resolve_dice_pool(macro_str, char)
             if total_pool == -1:
                 await interaction.response.send_message(
                     "Macro expression could not be resolved. Check for missing traits or invalid specializations.",
@@ -140,7 +145,7 @@ class Macro(commands.Cog):
                 )
                 return
 
-            if not hasattr(char, "macros") or name not in char.macros:
+            if not isinstance(getattr(char, "macros", None), dict) or name not in char.macros:
                 await interaction.response.send_message(
                     f"No existing macro named '{name}' found.",
                     ephemeral=True
@@ -150,23 +155,22 @@ class Macro(commands.Cog):
             char.macros[name] = macro_str
             char.save_parsed()
 
-            value_str = f"Dicepool: {total_pool}"
-            if specs_applied:
-                value_str += f" (using {', '.join(specs_applied)})"
-
+            specs_text = f" (using {', '.join(specs_applied)})" if specs_applied else ""
             await interaction.response.send_message(
-                f"Macro '{name}' updated.\n{value_str}",
+                f"Macro '{name}' updated successfully.\nDicepool: {total_pool}{specs_text}",
                 ephemeral=True
             )
 
+            logger.info(f"User {user_id} updated macro '{name}' for {char.name} ({total_pool} dice).")
+
         except Exception as e:
-            logger.error(f"Error updating macro: {e}")
+            logger.exception(f"Error updating macro for user {user_id}: {e}")
             await interaction.response.send_message(f"Error updating macro: {e}", ephemeral=True)
 
     # ---------------------------
     # LIST MACROS
     # ---------------------------
-    @macro.command(name="list", description="List all macros for your character with dicepool values")
+    @macro.command(name="list", description="List all macros for your character.")
     async def list_macros(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
         try:
@@ -181,7 +185,7 @@ class Macro(commands.Cog):
             macros = getattr(char, "macros", {}) or {}
             if not macros:
                 await interaction.response.send_message(
-                    f"You have no saved macros.",
+                    "You have no saved macros.",
                     ephemeral=True
                 )
                 return
@@ -192,13 +196,12 @@ class Macro(commands.Cog):
             )
 
             for macro_name, macro_expr in macros.items():
-                total, used_spec, specs_applied = resolve_dice_pool(macro_expr, char)
-                if total == -1:
-                    value_str = "Invalid or unknown traits"
-                else:
-                    value_str = f"Dicepool: {total}"
-                    if specs_applied:
-                        value_str += f" (using {', '.join(specs_applied)})"
+                total, _, specs_applied = resolve_dice_pool(macro_expr, char)
+                value_str = (
+                    "Invalid or unknown traits"
+                    if total == -1
+                    else f"Dicepool: {total}" + (f" (using {', '.join(specs_applied)})" if specs_applied else "")
+                )
 
                 embed.add_field(
                     name=macro_name,
@@ -209,14 +212,14 @@ class Macro(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
-            logger.error(f"Error listing macros: {e}")
+            logger.exception(f"Error listing macros for user {user_id}: {e}")
             await interaction.response.send_message(f"Error listing macros: {e}", ephemeral=True)
 
     # ---------------------------
     # DELETE MACRO
     # ---------------------------
-    @macro.command(name="delete", description="Delete a macro from your character")
-    @app_commands.describe(name="Name of the macro to delete")
+    @macro.command(name="delete", description="Delete a macro from your character.")
+    @app_commands.describe(name="Name of the macro to delete.")
     async def delete_macro(self, interaction: discord.Interaction, name: str):
         user_id = str(interaction.user.id)
         try:
@@ -228,7 +231,7 @@ class Macro(commands.Cog):
                 )
                 return
 
-            if not hasattr(char, "macros") or name not in char.macros:
+            if not isinstance(getattr(char, "macros", None), dict) or name not in char.macros:
                 await interaction.response.send_message(f"No macro named '{name}' found.", ephemeral=True)
                 return
 
@@ -236,7 +239,15 @@ class Macro(commands.Cog):
             char.save_parsed()
 
             await interaction.response.send_message(f"Macro '{name}' deleted.", ephemeral=True)
+            logger.info(f"User {user_id} deleted macro '{name}' for {char.name}.")
 
         except Exception as e:
-            logger.error(f"Error deleting macro: {e}")
+            logger.exception(f"Error deleting macro for user {user_id}: {e}")
             await interaction.response.send_message(f"Error deleting macro: {e}", ephemeral=True)
+
+
+# ---------------------------
+# Cog Setup Function
+# ---------------------------
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Macro(bot))

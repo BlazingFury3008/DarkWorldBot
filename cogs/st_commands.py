@@ -1,13 +1,15 @@
 import ast
+import asyncio
+import logging
+import discord
 from discord.ext import commands
 from discord import app_commands
-import discord
-from libs.character import *
 from dotenv import dotenv_values
-import asyncio
-config = dotenv_values(".env")
 
-import logging
+from libs.character import *
+from libs.help import requires_st_role
+
+config = dotenv_values(".env")
 
 logger = logging.getLogger(__name__)
 
@@ -20,36 +22,102 @@ EXCLUDED_TABS = [
     "XP & Downtime Logs",
     "Your Retainers",
     "Your Haven / Domain",
-    "Your Blood Storage"
-    ]
-
-def requires_st_role():
-    """Custom check to ensure the user has one of the allowed ST roles."""
-    async def predicate(interaction: discord.Interaction) -> bool:
-        raw_roles = config.get("ROLES", "[]")
-        try:
-            allowed_roles = ast.literal_eval(raw_roles)
-        except Exception:
-            allowed_roles = [r.strip() for r in raw_roles.split(",")]
-
-        user_roles = [r.name for r in getattr(interaction.user, "roles", [])]
-        if any(r in user_roles for r in allowed_roles):
-            return True
-
-        # Deny access with message
-        await interaction.response.send_message(
-            "You do not have the correct role to use this command.",
-            ephemeral=True
-        )
-        return False
-
-    return app_commands.check(predicate)
+    "Your Blood Storage",
+]
 
 
 class ST(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         logger.info("Registered ST Commands")
+
+    # ---------------------------
+    # Slash Command: Reload Cogs (ST Only)
+    # ---------------------------
+    @app_commands.command(name="reload", description="Reload bot cogs (ST only).")
+    @app_commands.describe(cog="Name of the cog to reload. Leave empty to reload all.")
+    @requires_st_role()
+    async def reload_cogs(self, interaction: discord.Interaction, cog: str = None):
+        """Reload a specific cog or all cogs (requires ST role)."""
+        await interaction.response.defer(ephemeral=True)
+
+        logger.info(f"[RELOAD] Command triggered by {interaction.user} ({interaction.user.id})")
+
+        try:
+            # ---------------------------
+            # Determine target cogs
+            # ---------------------------
+            if cog:
+                cog_name = f"cogs.{cog}" if not cog.startswith("cogs.") else cog
+                if cog_name in self.bot.extensions:
+                    cogs_to_reload = [cog_name]
+                    logger.info(f"[RELOAD] Target cog specified: {cog_name}")
+                else:
+                    logger.warning(f"[RELOAD] Cog not found: {cog_name}")
+                    await interaction.followup.send(
+                        f"Cog `{cog_name}` not found or not loaded.",
+                        ephemeral=True
+                    )
+                    return
+            else:
+                cogs_to_reload = list(self.bot.extensions.keys())
+                logger.info(f"[RELOAD] No cog specified. Reloading all ({len(cogs_to_reload)}) cogs.")
+
+            # ---------------------------
+            # Attempt reloads
+            # ---------------------------
+            reloaded = []
+            failed = []
+
+            for cog_name in cogs_to_reload:
+                try:
+                    logger.debug(f"[RELOAD] Attempting to reload: {cog_name}")
+                    await self.bot.reload_extension(cog_name)
+                    reloaded.append(cog_name)
+                    logger.info(f"[RELOAD] Successfully reloaded {cog_name}")
+                except Exception as e:
+                    failed.append((cog_name, str(e)))
+                    logger.exception(f"[RELOAD] Failed to reload {cog_name}: {e}")
+
+            # ---------------------------
+            # Build user response
+            # ---------------------------
+            lines = []
+
+            if reloaded:
+                lines.append("**Reloaded cogs:**")
+                for r in reloaded:
+                    lines.append(f"- `{r}`")
+                logger.info(f"[RELOAD] Total successfully reloaded: {len(reloaded)}")
+
+            if failed:
+                lines.append("")
+                lines.append("**Failed to reload:**")
+                for f_name, f_error in failed:
+                    lines.append(f"- `{f_name}` → {f_error}")
+                logger.warning(f"[RELOAD] {len(failed)} cog(s) failed to reload.")
+
+            if not reloaded and not failed:
+                lines.append("No cogs were reloaded.")
+                logger.warning("[RELOAD] No cogs to reload.")
+
+            message = "\n".join(lines)
+            await interaction.followup.send(message, ephemeral=True)
+
+            # ---------------------------
+            # Summary Log
+            # ---------------------------
+            logger.info(
+                f"[RELOAD SUMMARY] {interaction.user} reloaded {len(reloaded)} cog(s); "
+                f"{len(failed)} failed."
+            )
+
+        except Exception as e:
+            logger.exception(f"[RELOAD] Unexpected error: {e}")
+            await interaction.followup.send(
+                f"An unexpected error occurred while reloading: {e}",
+                ephemeral=True
+            )
 
     # ---------------------------
     # Weekly Reset (ST Only)
@@ -84,7 +152,7 @@ class ST(commands.Cog):
                 c.refetch_data()
                 c.reset_willpower()
 
-                # ✅ Run blocking Google Sheets write in a thread
+                # Run blocking Google Sheets write in a thread
                 await asyncio.to_thread(c.write_dta_log, interaction)
 
                 c.save_parsed()
@@ -107,7 +175,6 @@ class ST(commands.Cog):
         except Exception as e:
             logger.exception(f"[RESET] Error during weekly reset: {e}")
             await interaction.followup.send(f"Error occurred: {e}", ephemeral=True)
-
 
     # ---------------------------
     # Update Sheets (ST Only)
@@ -158,10 +225,7 @@ class ST(commands.Cog):
 
                         values = await asyncio.to_thread(base_ws.get_all_values)
                         if values:
-                            # Log which worksheet is being updated
                             logger.info(f"[SHEETS] Updating tab '{tab_name}' for {char.name}")
-
-                            # Clear & update inside thread to avoid blocking loop
                             await asyncio.to_thread(target_ws.clear)
                             await asyncio.to_thread(target_ws.update, "A1", values)
 
@@ -172,10 +236,31 @@ class ST(commands.Cog):
                     logger.error(f"[SHEETS] Failed to update {char.name}: {e}")
 
             await interaction.followup.send(
-                f" Synced base sheet to {updated_count} character sheets (excluding: {', '.join(EXCLUDED_TABS)}).",
+                f"Synced base sheet to {updated_count} character sheets (excluding: {', '.join(EXCLUDED_TABS)}).",
                 ephemeral=True
             )
 
         except Exception as e:
             logger.exception(f"[SHEETS] Update sheets error: {e}")
             await interaction.followup.send(f"Error: {e}", ephemeral=True)
+
+    # ---------------------------
+    # Resync Slash Commands (Admin Only)
+    # ---------------------------
+    @app_commands.command(name="resync", description="Resync slash commands with Discord (admin only).")
+    @requires_st_role()
+    async def resync(self, interaction: discord.Interaction):
+        """Resync all slash commands with Discord."""
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            synced = await self.bot.tree.sync()
+            logger.info(f"Slash commands resynced successfully ({len(synced)} commands).")
+            await interaction.followup.send(f"Commands resynced successfully. ({len(synced)} commands total.)", ephemeral=True)
+        except Exception as e:
+            logger.exception(f"Failed to sync commands: {e}")
+            await interaction.followup.send(f"Failed to sync commands: {e}", ephemeral=True)
+
+
+async def setup(bot):
+    await bot.add_cog(ST(bot))
