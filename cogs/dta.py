@@ -145,7 +145,7 @@ class DTA(commands.Cog):
 
             # Handle synchronous vs async safely
             try:
-                result = char.write_dta_log(ctx=interaction)
+                result = await char.write_dta_log(ctx=interaction)
                 if asyncio.iscoroutine(result):
                     await result
             except Exception as e:
@@ -178,7 +178,7 @@ class DTA(commands.Cog):
 
             # Handle sync safely for both async/sync versions
             try:
-                result = char.write_dta_log(ctx=interaction)
+                result = await char.write_dta_log(ctx=interaction)
                 if asyncio.iscoroutine(result):
                     await result
             except Exception as e:

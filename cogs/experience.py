@@ -1,3 +1,5 @@
+# cogs/exp.py
+
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -244,7 +246,7 @@ class EXP(commands.Cog):
                 curr_xp=char.curr_xp,
                 total_xp=char.total_xp,
                 entries=entries,
-                per_page=25,
+                per_page=15,
                 allow_delete=share
             )
 
@@ -254,12 +256,13 @@ class EXP(commands.Cog):
             logger.exception(f"[XP LOG] Error: {e}")
             await interaction.followup.send("An error occurred while retrieving XP logs.", ephemeral=not share)
 
-    # ---------- XP COLLECT: +1 per day with block grouping ----------
+    # ---------- XP COLLECT: +1 per day with block rule ----------
+    # Rule: continue only if last entry is positive AND last.storyteller == player's username.
+    # If last entry is ST (storyteller != username) or negative, start a new block.
+    # No cooldown bypass for ST.
 
     @xp.command(name="collect", description="Collect your daily +1 XP.")
-    @app_commands.describe(override_cooldown="ST only: bypass daily cooldown.")
-    async def xp_collect(self, interaction: discord.Interaction, override_cooldown: bool = False):
-        # ephemeral; it's a personal action
+    async def xp_collect(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
         user = interaction.user
@@ -270,35 +273,31 @@ class EXP(commands.Cog):
             if not char:
                 return await interaction.followup.send("You don't have a character yet. Use `/character init` first.", ephemeral=True)
 
-            # ST bypass check
-            can_bypass = False
-            if override_cooldown:
-                st_check = requires_st_role().predicate
-                can_bypass = await st_check(interaction)
-
             today = _fmt_ddmmyyyy(datetime.utcnow())
 
-            # Find last positive entry by this user to enforce daily cooldown
+            # Prevent same-day double claim by this user:
             last_user_gain_date = None
             if char.xp_log:
                 for e in reversed(char.xp_log):
-                    try:
-                        d = float(e.get("delta", 0) or 0)
-                    except Exception:
-                        d = 0.0
-                    if d > 0 and (e.get("storyteller") or "") == username:
-                        # date in comment is our authoritative range
-                        comment = (e.get("comment") or "").strip()
-                        if " - " in comment:
-                            last_user_gain_date = comment.split(" - ", 1)[1].strip()
-                        else:
-                            last_user_gain_date = comment or e.get("date") or today
-                        break
+                    # We only care about player's own positive entries
+                    if (e.get("storyteller") or "") == username:
+                        try:
+                            d = float(e.get("delta", 0) or 0)
+                        except Exception:
+                            d = 0.0
+                        if d > 0:
+                            # date in comment is authoritative; parse rightmost date if present
+                            comment = (e.get("comment") or "").strip()
+                            if " - " in comment:
+                                last_user_gain_date = comment.split(" - ", 1)[1].strip()
+                            else:
+                                last_user_gain_date = comment or e.get("date") or today
+                            break
 
-            if (not can_bypass) and last_user_gain_date == today:
+            if last_user_gain_date == today:
                 return await interaction.followup.send("You've already collected XP today. Come back tomorrow!", ephemeral=True)
 
-            # Determine whether to start a new block or extend the last one
+            # Determine whether to extend or start a new block
             new_entry_needed = True
             if char.xp_log:
                 last = char.xp_log[-1]
@@ -307,41 +306,35 @@ class EXP(commands.Cog):
                 except Exception:
                     last_delta = 0.0
 
-                # If last entry was a gain (>=0), extend block; if a spend (<0), create new block
-                if last_delta >= 0:
-                    # Extend last block if it's a user collection line (storyteller=username) OR any positive gain block
-                    new_entry_needed = False
+                # Extend only if last is positive AND last.storyteller == username (player's own block)
+                if last_delta >= 0 and (last.get("storyteller") or "") == username:
+                    new_entry_needed = False  # continue same block
+                else:
+                    new_entry_needed = True   # ST entry or spend → new block
 
             if new_entry_needed or not char.xp_log:
                 # new block starting today
                 entry = {
                     "date": today,
                     "delta": 1.0,
-                    "comment": today,
+                    "comment": f"Daily XP; {today}",
                     "storyteller": username,
                 }
                 char.xp_log.append(entry)
             else:
                 # extend last block
                 last = char.xp_log[-1]
-                # Update delta +1
-                try:
-                    last["delta"] = float(last.get("delta", 0) or 0) + 1.0
-                except Exception:
-                    last["delta"] = 1.0
-
-                # Update comment range "first - today"
+                last["delta"] = float(last.get("delta", 0) or 0) + 1.0
                 prev_comment = (last.get("comment") or "").strip()
                 if " - " in prev_comment:
                     first_day = prev_comment.split(" - ", 1)[0].strip()
                 else:
                     first_day = prev_comment if prev_comment else today
-                last["comment"] = f"{first_day} - {today}"
-                # Ensure storyteller is set (username)
-                last["storyteller"] = username
+                last["comment"] = f"Daily XP; {first_day} - {today}"
+                last["storyteller"] = username  # ensure it's marked as player's block
 
             # Sync to Google Sheets & save
-            char.write_xp_log(interaction)
+            await char.write_xp_log(interaction)
             char.save_parsed()
             await interaction.followup.send("Daily XP collected (+1). Your log has been updated.", ephemeral=True)
 
@@ -350,6 +343,8 @@ class EXP(commands.Cog):
             await interaction.followup.send("An error occurred while collecting XP.", ephemeral=True)
 
     # ---------- XP GIVE: ST only, +/- amount with reason ----------
+    # Always creates a NEW entry (positive or negative).
+    # Negative (spend) ends the current block; next collect will start a new block.
 
     @xp.command(name="give", description="Storyteller: give or remove XP from a player.")
     @requires_st_role()
@@ -372,21 +367,18 @@ class EXP(commands.Cog):
 
             today = _fmt_ddmmyyyy(datetime.utcnow())
             amt = float(amount)
-
-            # If negative (spend), we log a new line (spend breaks blocks).
-            # If positive, we create a new line (explicit ST award should be distinct from daily block).
             comment = reason or "Storyteller adjustment"
 
             new_entry = {
                 "date": today,
                 "delta": amt,
-                "comment": comment if amt >= 0 else comment,  # same comment either way
-                "storyteller": st_name,
+                "comment": comment,
+                "storyteller": st_name,  # mark as ST entry
             }
             char.xp_log.append(new_entry)
 
             # Sync to Google Sheets & save
-            char.write_xp_log(interaction)
+            await char.write_xp_log(interaction)
             char.save_parsed()
 
             sign = "+" if amt >= 0 else ""

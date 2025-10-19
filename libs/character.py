@@ -702,8 +702,10 @@ class Character:
             logger.exception(self._ctx(f"DTA - Failed to open sheet: {e}"))
             raise
 
+
+        max_rows = worksheet.row_count
         # Clear existing range
-        clear_range = "AF12:BB199"
+        clear_range = f"AF12:BB{max_rows}"
         try:
             worksheet.batch_clear([clear_range])
             logger.info(self._ctx(f"DTA - Cleared existing log range {clear_range}"))
@@ -775,17 +777,15 @@ class Character:
         else:
             logger.info(self._ctx("DTA - No rows to write after processing"))
 
-    def write_xp_log(self, ctx: discord.Interaction):
+    async def write_xp_log(self, ctx: discord.Interaction):
         """
-        Write XP log entries to 'XP & Downtime Logs' tab.
+        Write XP log entries to the 'XP & Downtime Logs' worksheet.
 
-        Columns (row 12+):
-          B  = date (string, e.g. '12/10/2025' or '12/10/2025 - 18/10/2025')
-          F  = gained (positive delta, number)
-          I  = spent (negative delta, number)
-          L  = comment (same as date block string)
-          X  = storyteller (Discord username)
+        ✅ Inserts new rows one at a time when near bottom (retains formatting via inherit=True)
+        ✅ Clears values in inserted rows while keeping formatting and merged cells
+        ✅ Adds a warning if the sheet is nearly full (less than 10 rows remaining)
         """
+
         logs: List[Dict] = getattr(self, "xp_log", []) or []
         if not logs:
             logger.info("XP - write_xp_log: no entries to write.")
@@ -799,59 +799,82 @@ class Character:
             logger.exception(f"XP - write_xp_log: failed to open sheet: {e}")
             return
 
-        # We will clear a conservative block and rewrite.
-        # B..X spans 23 columns (B is col 2, X is col 24).
-        clear_range = "B12:X199"
-        try:
-            ws.batch_clear([clear_range])
-        except Exception as e:
-            logger.warning(f"XP - write_xp_log: failed to clear range {clear_range}: {e}")
-
-        # Prepare rows
+        start_col = 2    # Column B
+        end_col = 24     # Column X
+        total_cols = end_col - start_col + 1
         start_row = 12
+
+        # Convert XP logs into rows
         rows = []
         for entry in logs:
-            # pad to 23 columns (B..X) and fill in the mapped columns
-            # We only care about B,F,I,L,X.
-            # We'll build an array of 23 cells initialized to "".
-            row = [""] * 23
-
+            row = [""] * total_cols
             date_str = entry.get("date") or ""
             comment = entry.get("comment") or date_str
             storyteller = entry.get("storyteller") or "N/A"
-
-            # B (index 0)
-            row[0] = date_str
-
-            # Delta: positive goes to F (index 4), negative goes to I (index 7)
             delta = entry.get("delta", 0) or 0
+
             try:
-                d = float(delta)
-            except Exception:
-                d = 0.0
+                delta = float(delta)
+            except:
+                delta = 0.0
 
-            if d >= 0:
-                row[4] = d
+            row[0] = date_str                   # Column B
+            if delta >= 0:
+                row[4] = delta                  # Column F (gain)
             else:
-                row[7] = abs(d)
+                row[7] = abs(delta)             # Column I (spent)
 
-            # L (index 10): comment
-            row[10] = comment
-
-            # X (index 23): storyteller (Discord username)
-            row[23] = storyteller
-
+            row[10] = comment                   # Column L (comment)
+            row[end_col - start_col] = storyteller  # Column X (storyteller)
             rows.append(row)
 
-        if rows:
-            end_row = start_row + len(rows) - 1
-            rng = f"B{start_row}:X{end_row}"
-            try:
-                ws.update(rng, rows)
-                logger.info(f"XP - write_xp_log: wrote {len(rows)} rows to {rng}")
-            except Exception as e:
-                logger.exception(f"XP - write_xp_log: failed to update {rng}: {e}")
+        end_row = start_row + len(rows) - 1
+        max_rows = ws.row_count
 
+        rows_remaining = max_rows - end_row
+        if rows_remaining <= 10:
+            warning_msg = (
+                f"⚠ **Warning:** The XP log in your Google Sheet is nearly full.\n"
+                f"Only **{rows_remaining} rows** remain before reaching the sheet limit.\n\n"
+                f"Please manually add more blank rows below row **{max_rows}** "
+                f"in the 'XP & Downtime Logs' tab to prevent data loss."
+            )
+
+            try:
+                # DM the user who triggered the action
+                if ctx and hasattr(ctx, "user"):
+                    await ctx.user.send(warning_msg)
+            except Exception:
+                # If DM fails, try sending where the command was used
+                try:
+                    ctx.followup.send(warning_msg, ephemeral=True)
+                except:
+                    pass
+
+            logger.warning(
+                f"XP sheet nearly full for character {self.name} — "
+                f"{rows_remaining} row(s) remaining out of {max_rows}"
+            )
+
+        # ✅ STEP 3: Clear the current XP region
+        buffer = 10
+        end_clear_row = min(start_row + len(rows) + buffer, max_rows - 5)
+        clear_range = f"B{start_row}:X{end_clear_row}"
+
+        try:
+            ws.batch_clear([clear_range])
+            logger.info(f"XP - Cleared old data in {clear_range}")
+        except Exception as e:
+            logger.warning(f"XP - Failed to clear {clear_range}: {e}")
+
+        # ✅ STEP 4: Write updated XP log
+        update_range = f"B{start_row}:X{end_row}"
+        try:
+            ws.update(update_range, rows)
+            logger.info(f"XP - Wrote {len(rows)} rows to {update_range}")
+        except Exception as e:
+            logger.exception(f"XP - Failed to update XP log: {e}")
+        
     def fetch_xp_log(self):
         """
         Fetch and parse XP log from 'XP & Downtime Logs', filling:
@@ -895,7 +918,7 @@ class Character:
         # B12:AB(last_row-5)
         total_sheet_rows = ws.row_count
         start_row = 12
-        end_row = max(start_row, total_sheet_rows - 5)
+        end_row = max(start_row, total_sheet_rows - 3)
         rng = f"B{start_row}:AB{end_row}"
 
         try:
@@ -916,8 +939,8 @@ class Character:
             increase = row[4] or 0
             decrease = row[7] or 0
             comment = row[10]
-            storyteller = row[23]
-
+            storyteller = row[22]
+        
             try:
                 inc = float(increase) if increase not in (None, "") else 0.0
             except Exception:
