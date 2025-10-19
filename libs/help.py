@@ -370,21 +370,24 @@ def get_st_help_embed() -> discord.Embed:
 def requires_st_role():
     """Custom check to ensure the user has one of the allowed ST roles."""
     async def predicate(interaction: discord.Interaction) -> bool:
-        raw_roles = config.get("ROLES", "[]")
         try:
-            allowed_roles = ast.literal_eval(raw_roles)
-        except Exception:
-            allowed_roles = [r.strip() for r in raw_roles.split(",")]
+            raw_roles = config.get("ROLES", "[]")
+            try:
+                allowed_roles = ast.literal_eval(raw_roles)
+            except Exception:
+                allowed_roles = [r.strip() for r in raw_roles.split(",")]
 
-        user_roles = [r.name for r in getattr(interaction.user, "roles", [])]
-        if any(r in user_roles for r in allowed_roles):
-            return True
+            user_roles = [r.name for r in getattr(interaction.user, "roles", [])]
+            if any(r in user_roles for r in allowed_roles):
+                return True
 
-        # Deny access with message
-        await interaction.response.send_message(
-            "You do not have the correct role to use this command.",
-            ephemeral=True
-        )
-        return False
+            # Deny access with message
+            await interaction.response.send_message(
+                "You do not have the correct role to use this command.",
+                ephemeral=True
+            )
+            return False
+        except Exception as e:
+            return
 
     return app_commands.check(predicate)

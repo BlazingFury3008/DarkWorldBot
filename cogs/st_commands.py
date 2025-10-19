@@ -8,6 +8,7 @@ from dotenv import dotenv_values
 
 from libs.character import *
 from libs.help import requires_st_role
+from libs.database_loader import get_all_characters
 
 config = dotenv_values(".env")
 

@@ -264,52 +264,55 @@ class Persona(commands.Cog):
     # ===================================================
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot:
+        try:
+            if message.author.bot:
+                return
+
+            user_id = str(message.author.id)
+            content = message.content.strip()
+            personas = list_personas_for_user(user_id)
+            char = Character.load_for_user(user_id)
+
+            if not personas or not char:
+                return
+
+            for persona_entry in personas:
+                keyword = persona_entry.get("keyword")
+                if not keyword:
+                    continue
+
+                trigger = f"{keyword}:"
+                if content.lower().startswith(trigger.lower()):
+                    spoken_text = content[len(trigger):].strip()
+
+                    try:
+                        await message.delete()
+                    except discord.Forbidden:
+                        logger.warning("Missing permissions to delete messages.")
+
+                    header_text = parse_header(persona_entry["header"], char.to_dict()) or persona_entry["header"]
+                    full_message = f"{header_text}\n{spoken_text}"
+
+                    avatar_bytes = get_persona_image(persona_entry["uuid"])
+                    username = persona_entry.get("header", "Persona")
+
+                    try:
+                        webhook = await message.channel.create_webhook(
+                            name=username,
+                            avatar=avatar_bytes if avatar_bytes else None,
+                        )
+                        sent_msg = await webhook.send(full_message, username=username, wait=True)
+                        await webhook.delete()
+
+                        self.tupper_map[sent_msg.id] = {
+                            "user_id": user_id,
+                            "persona_name": username,
+                        }
+                    except Exception as e:
+                        logger.error(f"Failed to send persona message: {e}")
+                    break
+        except Exception as e:
             return
-
-        user_id = str(message.author.id)
-        content = message.content.strip()
-        personas = list_personas_for_user(user_id)
-        char = Character.load_for_user(user_id)
-
-        if not personas or not char:
-            return
-
-        for persona_entry in personas:
-            keyword = persona_entry.get("keyword")
-            if not keyword:
-                continue
-
-            trigger = f"{keyword}:"
-            if content.lower().startswith(trigger.lower()):
-                spoken_text = content[len(trigger):].strip()
-
-                try:
-                    await message.delete()
-                except discord.Forbidden:
-                    logger.warning("Missing permissions to delete messages.")
-
-                header_text = parse_header(persona_entry["header"], char.to_dict()) or persona_entry["header"]
-                full_message = f"{header_text}\n{spoken_text}"
-
-                avatar_bytes = get_persona_image(persona_entry["uuid"])
-                username = persona_entry.get("header", "Persona")
-
-                try:
-                    webhook = await message.channel.create_webhook(
-                        name=username,
-                        avatar=avatar_bytes if avatar_bytes else None,
-                    )
-                    sent_msg = await webhook.send(full_message, username=username, wait=True)
-                    await webhook.delete()
-
-                    self.tupper_map[sent_msg.id] = {
-                        "user_id": user_id,
-                        "persona_name": username,
-                    }
-                except Exception as e:
-                    logger.error(f"Failed to send persona message: {e}")
-                break
 
 
 # ===================================================

@@ -91,35 +91,6 @@ class CharacterCog(commands.Cog):
                 await interaction.followup.send("Character already saved!", ephemeral=True)
                 return
 
-            # Create a default persona for this character
-            try:
-                # Safe keyword: first 4 letters of name, or fallback to UUID prefix
-                base_keyword = (char.name or char.uuid or "pc")[:4]
-                keyword = base_keyword.lower().replace(" ", "")
-
-                persona_uuid = str(uuid.uuid4())
-                # generate_default_header usually expects dict-like character data
-                header = generate_default_header(char.to_dict() if hasattr(char, "to_dict") else char)
-
-                # DB function signature: uuid, user_id, header, keyword, image
-                create_or_update_persona(
-                    uuid=persona_uuid,
-                    user_id=user_id,
-                    header=header,
-                    keyword=keyword,
-                    image=None,
-                )
-                logger.info(
-                    f"Persona created for character {char.name} ({char.uuid}) -> Persona ID: {persona_uuid}"
-                )
-            except Exception as e:
-                logger.error(f"Failed to create persona for {getattr(char, 'uuid', '?')}: {e}")
-                await interaction.followup.send(
-                    f"Character saved, but there was an error creating the persona: `{e}`",
-                    ephemeral=True
-                )
-                return
-
             # Nickname
             base_username = interaction.user.name
             playername = (char.player_name or "").strip()
@@ -157,6 +128,37 @@ class CharacterCog(commands.Cog):
                     await member.edit(nick=new_nick)
                 except discord.Forbidden:
                     message = "Character saved, but I don't have permission to change your nickname."
+
+            # Create a default persona for this character
+            try:
+                # Safe keyword: first 4 letters of name, or fallback to UUID prefix
+                base_keyword = (char.name or char.uuid or "pc")[:4]
+                keyword = base_keyword.lower().replace(" ", "")
+
+                persona_uuid = str(uuid.uuid4())
+                # generate_default_header usually expects dict-like character data
+                header = generate_default_header(char.to_dict() if hasattr(char, "to_dict") else char)
+
+                # DB function signature: uuid, user_id, header, keyword, image
+                create_or_update_persona(
+                    uuid=persona_uuid,
+                    user_id=user_id,
+                    header=header,
+                    name=char.name,
+                    keyword=keyword,
+                    image=None,
+                )
+                logger.info(
+                    f"Persona created for character {char.name} ({char.uuid}) -> Persona ID: {persona_uuid}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to create persona for {getattr(char, 'uuid', '?')}: {e}")
+                await interaction.followup.send(
+                    f"Character saved, but there was an error creating the persona: `{e}`",
+                    ephemeral=True
+                )
+                return
+
 
             await interaction.followup.send(
                 f"Saved and set nickname to **{new_nick}**\n{message}",
